@@ -1,0 +1,383 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Swift Dialog — Systems Check | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Swift Dialog — Systems Check</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Provides an interactive swiftDialog systems-check window for the currently signed-in macOS user. The window continuously evaluates four user-controlled configuration requirements and directs the user to the relevant System Settings pane when remediation is needed.</p><p>The four checks are NCSTREAMER Screen &amp; Audio Recording, Location Services, Google Chrome as the default browser, and Apple Passwords disabled as an AutoFill provider.</p><p>The script is primarily a detection-and-guidance workflow. It does not forcibly enable these user-controlled settings. Instead, it opens the appropriate settings location, polls the device every 3 seconds, and automatically closes the checklist once all four checks report success.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Defines the swiftDialog executable at /usr/local/bin/dialog, polling interval 3 seconds, branding assets, user instructions, deep-link URLs, and display labels used by the checklist.</p><p>Defines the Tow branding assets /Users/Shared/Tow Foundation/FinderguyDirectorPose1024.png, /Users/Shared/Tow Foundation/TogaPromptBackground.jpg, and /Users/Shared/Tow Foundation/TogaNotif.aiff. A built-in SF=checklist,colour=#2878D0 symbol is used if the custom icon is unavailable.</p><p>Defines run_as_user() so GUI-sensitive commands can execute in the active user&#x27;s session. When the script itself is root, it combines launchctl asuser with sudo -u.</p><p>Registers a cleanup trap for EXIT, INT, TERM, and HUP. Cleanup terminates a still-running dialog and removes the temporary command, plist, and JSON files.</p><p>Checks NCSTREAMER Screen Recording consent by reading /Library/Application Support/com.apple.TCC/TCC.db in read-only mode with sqlite3. It queries kTCCServiceScreenCapture for client com.ninjarmm.ncstreamer and treats auth_value = 2 as allowed.</p><p>The remediate_ncstreamer() function intentionally performs no TCC modification. Screen-recording consent remains user-controlled; the checklist row directs the user to the relevant Privacy &amp; Security pane.</p><p>Checks Location Services by reading LocationServicesEnabled first from /var/db/locationd/Library/Preferences/ByHost/com.apple.locationd and then from /Library/Preferences/com.apple.locationd as a fallback. Values 1 or true are treated as enabled.</p><p>Checks the default HTTPS handler using NSWorkspace against https://www.example.com/. If that query fails, it falls back to LSCopyDefaultHandlerForURLScheme(&quot;https&quot;).</p><p>Confirms Google Chrome is installed with open -Ra &quot;Google Chrome&quot;, lowercases the returned handler bundle ID, and requires it to equal com.google.chrome.</p><p>Checks the Apple Passwords AutoFill-provider state through System Events UI inspection because the script contains no public command-line API for directly querying Apple&#x27;s provider toggle.</p><p>Before interpreting the Passwords checkbox, the script positively verifies that the visible AutoFill &amp; Passwords pane is open by examining the System Settings window title or visible heading text. This prevents the same positional accessibility path from being interpreted while an unrelated pane is open.</p><p>The Passwords check first searches for an accessibility checkbox explicitly named or described as Passwords. If no labeled checkbox is found, it falls back to the tested positional path checkbox 1 of group 2 of scroll area 1 of group 1 of group 3 of splitter group 1 of group 1 of window 1 — but only after the correct pane has been confirmed.</p><p>When the Apple Passwords provider is observed as disabled, the script writes the per-user marker ~/Library/Application Support/Tow Foundation/.apple-passwords-autofill-disabled containing verified-autofill-pane-v2. A valid existing marker allows future runs to treat this requirement as previously verified without reopening the settings pane.</p><p>Runs a silent preflight before creating any dialog files. If all four checks already pass, the script exits with 0 immediately and the user sees nothing.</p><p>If any requirement is not confirmed, creates unique temporary files under /var/tmp/com.agilant.setup-assistant.&lt;UID&gt;.&lt;PID&gt; for the swiftDialog command channel, source plist, and generated JSON configuration.</p><p>Builds the checklist plist with title A Quick Systems Check!, the instructional message, a 870 × 470 movable window, close/minimize/maximize controls, no primary action button, compact list styling, and the temporary command-file path.</p><p>Creates four interactive list rows: Screen Access, Location Services, Default Browser, and Autofill &amp; Passwords. Each row includes user-facing instructions and an x-apple.systempreferences: deep link.</p><p>If the custom background and opening sound are readable, they are added to the swiftDialog configuration. Missing optional branding assets do not prevent the checklist from being created.</p><p>Converts the plist configuration to JSON with plutil -convert json, verifies the JSON file is non-empty, changes its ownership to the signed-in user, and launches swiftDialog in that user&#x27;s GUI session.</p><p>After a 0.25-second delay, re-sends the dialog message through the command file. The source comment identifies this as a workaround for a swiftDialog 3.1 layout race that can collapse the initial message area while the list view is being constructed.</p><p>While the dialog remains open, re-runs all four detection functions every 3 seconds and updates each list row through the command file.</p><p>A successful row is shown with status success; a known failed requirement is shown as fail with Click to configure; and an indeterminate check is shown as wait with an Unable to verify or pane-specific verification message.</p><p>When all four requirements simultaneously report success, waits 1 second, sends quit: to swiftDialog, and exits the polling loop.</p><p>If the user manually closes the dialog before all checks pass, the polling loop ends and the script finishes without forcibly reopening the window during that same execution.</p></div></details><details><summary>Checklist Detection Details</summary><div class="section-body"><p>NCSTREAMER — Reads the system TCC database and evaluates only kTCCServiceScreenCapture for com.ninjarmm.ncstreamer. The script does not write to TCC.</p><p>LOCATION SERVICES — Evaluates the global LocationServicesEnabled preference and directs the user to the Location Services privacy pane if it is disabled or cannot be confirmed.</p><p>DEFAULT BROWSER — Determines the current handler for the https URL scheme and requires com.google.chrome. The handler is queried repeatedly, so a browser change made while the dialog is open can be detected without rerunning the script.</p><p>AUTOFILL &amp; PASSWORDS — Uses Accessibility/UI inspection only after the AutoFill &amp; Passwords pane has been positively identified. Once the Apple Passwords provider has been observed as disabled, a per-user marker is written for future silent preflight checks.</p></div></details><details><summary>User Experience And Workflow</summary><div class="section-body"><p>Configured Macs remain silent: the dialog is not created when every requirement passes preflight.</p><p>When one or more requirements need attention, the user receives a branded checklist. Clicking a row opens the corresponding System Settings location, and the row status updates automatically as the device state changes.</p><p>There is no conventional Continue/Done button. The window is expected to close automatically after all four items pass, although the normal window controls also allow the user to close or minimize it.</p><p>The message explicitly states that the menu can reappear whenever a required setting is detected as needing attention, making the script suitable for recurring login or compliance-remediation execution.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><p>DEPENDENCY  swiftDialog must exist and be executable at /usr/local/bin/dialog. If it is missing, the script returns an error before presenting any UI.</p><p>DEPENDENCY  The Apple Passwords check relies on System Events accessibility/UI scripting of System Settings. If the executing workflow lacks the required UI-scripting access or Apple changes the pane&#x27;s accessibility hierarchy, that check can return an indeterminate state instead of success/failure.</p><p>DEPENDENCY  The NCSTREAMER check requires read access to /Library/Application Support/com.apple.TCC/TCC.db and an executable /usr/bin/sqlite3. If either requirement is unavailable, the row reports that the state cannot be determined.</p><p>BRANDING DEPENDENCY  The custom icon, background, and notification sound are stored under /Users/Shared/Tow Foundation. Their usability therefore depends on those shared resources being present and readable. This directly relates to the separate Resource Folder Access maintenance workflow used to normalize permissions after root-context NinjaOne file transfers.</p><div class="callout danger">IMPORTANT CAVEAT  The Apple Passwords marker is a remembered verification state, not a continuous authoritative query. Once .apple-passwords-autofill-disabled contains verified-autofill-pane-v2, apple_passwords_provider_is_disabled() returns success before reopening or re-reading the actual checkbox. If the user later re-enables Apple Passwords, this script can continue treating that requirement as compliant until the marker is removed or invalidated by another workflow.</div><div class="callout danger">IMPORTANT CAVEAT  The instruction says Screen &amp; Audio Recording, but the NCSTREAMER detection logic explicitly checks only the kTCCServiceScreenCapture TCC service. The source contains no separate audio-specific permission query.</div><div class="callout danger">IMPORTANT CAVEAT  Closing the dialog does not require all four requirements to be satisfied. After the dialog process ends, the script reaches the end of main() and can return success even though one or more checklist items were still unresolved. A later scheduled/login execution is therefore responsible for presenting the checklist again.</div><p>MAINTENANCE NOTE  The constant CHROME_BUNDLE_ID=&quot;com.google.Chrome&quot; is declared but is not used by chrome_is_default_browser(). The comparison is separately hard-coded as com.google.chrome after lowercasing the detected handler. Updating only the constant would therefore not change the actual validation logic.</p><p>MAINTENANCE NOTE  The System Settings deep links are explicitly documented in the source as best-effort. Apple does not provide a stable public catalogue of every pane anchor, so a future macOS release can ignore an anchor or open only the parent settings pane.</p><p>MAINTENANCE NOTE  The browser deep link currently points to x-apple.systempreferences:com.apple.Desktop-Settings.extension?StageManager. Its purpose is navigation assistance only; actual compliance is determined independently from the live https handler.</p><p>The script filename uses a .zsh extension, but the interpreter is #!/bin/bash. Future syntax changes should remain compatible with Bash unless the shebang is intentionally changed.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Swift_Dialog_-_Systems_Check.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Swift_Dialog_-_Systems_Check.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+# Interactive macOS setup assistant for swiftDialog.
+# Run in the signed-in user&#x27;s GUI session (root is OK when launched by MDM).
+
+readonly DIALOG_BIN=&quot;/usr/local/bin/dialog&quot;
+readonly CHROME_BUNDLE_ID=&quot;com.google.Chrome&quot;
+readonly POLL_SECONDS=3
+readonly PASSWORDS_MARKER_VALUE=&quot;verified-autofill-pane-v2&quot;
+
+# -----------------------------------------------------------------------------
+# Branding variables
+# Set BRAND_ICON to the local PNG/ICNS path for the &quot;little Finder guy.&quot;
+# Set BACKGROUND_IMAGE to the local PNG/JPG used behind the window content.
+# Leave either value empty to use its fallback/default.
+# -----------------------------------------------------------------------------
+readonly BRAND_ICON=&quot;/Users/Shared/Tow Foundation/FinderguyDirectorPose1024.png&quot;
+readonly BACKGROUND_IMAGE=&quot;/Users/Shared/Tow Foundation/TogaPromptBackground.jpg&quot;
+readonly OPENING_SOUND=&quot;/Users/Shared/Tow Foundation/TogaNotif.aiff&quot;
+readonly FALLBACK_ICON=&quot;SF=checklist,colour=#2878D0&quot;
+readonly DIALOG_TITLE=&quot;A Quick Systems Check!&quot;
+readonly DIALOG_MESSAGE=&quot;We need your help to make a few adjustments to specific device settings. This helps ensure the best possible experience.&lt;br&gt;&lt;br&gt;This menu will appear whenever we detect that one of the settings below needs attention.&quot;
+
+# Replace these four values with the final instructions you provide.
+readonly INSTRUCTION_NCSTREAMER=&quot;Enable Screen &amp; Audio Recording for NCSTREAMER.&quot;
+readonly INSTRUCTION_LOCATION=&quot;Turn on Location Services for your Mac.&quot;
+readonly INSTRUCTION_BROWSER=&quot;Set Google Chrome as your default browser.&quot;
+readonly INSTRUCTION_PASSWORDS=&quot;Under Autofill, ONLY turn off the Apple Passwords app.&quot;
+
+# Deep links are best-effort: Apple does not publish a stable catalogue of pane
+# anchors, and anchors can change between macOS releases. The script falls back
+# to the parent pane when a version-specific anchor is not honoured.
+readonly NCSTREAMER_SETTINGS_URL=&quot;x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture&quot;
+readonly LOCATION_SETTINGS_URL=&quot;x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices&quot;
+readonly BROWSER_SETTINGS_URL=&quot;x-apple.systempreferences:com.apple.Desktop-Settings.extension?StageManager&quot;
+readonly PASSWORDS_SETTINGS_URL=&quot;x-apple.systempreferences:com.apple.Passwords-Settings.extension&quot;
+
+readonly ITEM_NC=&quot;ncstreamer screen and audio recording&quot;
+readonly ITEM_LOCATION=&quot;Location Services&quot;
+readonly ITEM_BROWSER=&quot;Google Chrome default browser&quot;
+readonly ITEM_PASSWORDS=&quot;Apple Passwords Autofill provider&quot;
+
+CONSOLE_USER=&quot;&quot;
+CONSOLE_UID=&quot;&quot;
+COMMAND_FILE=&quot;&quot;
+PLIST_FILE=&quot;&quot;
+CONFIG_FILE=&quot;&quot;
+DIALOG_PID=&quot;&quot;
+PASSWORDS_CONFIRMED=0
+USER_HOME=&quot;&quot;
+PASSWORDS_MARKER=&quot;&quot;
+
+console_user() {
+  /usr/bin/stat -f &#x27;%Su&#x27; /dev/console 2&gt;/dev/null
+}
+
+run_as_user() {
+  if (( EUID == 0 )); then
+    /bin/launchctl asuser &quot;$CONSOLE_UID&quot; /usr/bin/sudo -u &quot;$CONSOLE_USER&quot; -- &quot;$@&quot;
+  else
+    &quot;$@&quot;
+  fi
+}
+
+dialog_command() {
+  /usr/bin/printf &#x27;%s\n&#x27; &quot;$1&quot; &gt;&gt; &quot;$COMMAND_FILE&quot;
+}
+
+cleanup() {
+  [[ -n &quot;$DIALOG_PID&quot; ]] &amp;&amp; /bin/kill &quot;$DIALOG_PID&quot; 2&gt;/dev/null
+  [[ -n &quot;$COMMAND_FILE&quot; ]] &amp;&amp; /bin/rm -f &quot;$COMMAND_FILE&quot;
+  [[ -n &quot;$PLIST_FILE&quot; ]] &amp;&amp; /bin/rm -f &quot;$PLIST_FILE&quot;
+  [[ -n &quot;$CONFIG_FILE&quot; ]] &amp;&amp; /bin/rm -f &quot;$CONFIG_FILE&quot;
+}
+trap cleanup EXIT INT TERM HUP
+
+# -----------------------------------------------------------------------------
+# ncstreamer integration point
+#
+# NinjaOne identifies the app as com.ninjarmm.ncstreamer. Screen recording
+# consent is user-controlled, so this script only checks it and directs the
+# user to the correct pane. Keep return values conventional:
+# 0 = enabled, 1 = disabled, 2 = unable to determine.
+# -----------------------------------------------------------------------------
+ncstreamer_is_enabled() {
+  local tcc_db=&quot;/Library/Application Support/com.apple.TCC/TCC.db&quot;
+  local value=&quot;&quot;
+  [[ -r &quot;$tcc_db&quot; &amp;&amp; -x /usr/bin/sqlite3 ]] || return 2
+
+  value=&quot;$(/usr/bin/sqlite3 -readonly &quot;$tcc_db&quot; \
+    &quot;SELECT auth_value FROM access WHERE service=&#x27;kTCCServiceScreenCapture&#x27; AND client=&#x27;com.ninjarmm.ncstreamer&#x27; ORDER BY last_modified DESC LIMIT 1;&quot; \
+    2&gt;/dev/null)&quot; || return 2
+  [[ -n &quot;$value&quot; ]] || return 1
+  [[ &quot;$value&quot; == &quot;2&quot; ]] &amp;&amp; return 0
+  return 1
+}
+
+remediate_ncstreamer() {
+  # Intentionally do not modify TCC. The user grants Screen &amp; System Audio
+  # Recording access interactively by clicking this checklist row.
+  return 0
+}
+
+location_services_is_enabled() {
+  local value=&quot;&quot;
+  value=$(/usr/bin/defaults read \
+    /var/db/locationd/Library/Preferences/ByHost/com.apple.locationd \
+    LocationServicesEnabled 2&gt;/dev/null) || \
+  value=$(/usr/bin/defaults read \
+    /Library/Preferences/com.apple.locationd \
+    LocationServicesEnabled 2&gt;/dev/null) || return 2
+
+  [[ &quot;$value&quot; == &quot;1&quot; || &quot;$value&quot; == &quot;true&quot; ]] &amp;&amp; return 0
+  return 1
+}
+
+default_https_handler() {
+  # Query NSWorkspace each time so changes made while the dialog is open are
+  # observed immediately. Fall back to the older LaunchServices function on
+  # macOS versions where the NSWorkspace bridge is unavailable.
+  local handler=&quot;&quot;
+  handler=&quot;$(run_as_user /usr/bin/osascript -l JavaScript -e &#x27;
+    ObjC.import(&quot;AppKit&quot;);
+    var u = $.NSURL.URLWithString(&quot;https://www.example.com/&quot;);
+    var appURL = $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL(u);
+    if (!appURL) throw new Error(&quot;No HTTPS handler&quot;);
+    ObjC.unwrap($.NSBundle.bundleWithURL(appURL).bundleIdentifier);
+  &#x27; 2&gt;/dev/null)&quot;
+  if [[ -n &quot;$handler&quot; ]]; then
+    /usr/bin/printf &#x27;%s\n&#x27; &quot;$handler&quot;
+    return 0
+  fi
+
+  run_as_user /usr/bin/osascript -l JavaScript -e \
+    &#x27;ObjC.import(&quot;CoreServices&quot;); ObjC.unwrap($.LSCopyDefaultHandlerForURLScheme(&quot;https&quot;))&#x27; \
+    2&gt;/dev/null
+}
+
+chrome_is_default_browser() {
+  /usr/bin/open -Ra &quot;Google Chrome&quot; 2&gt;/dev/null || return 1
+  local handler
+  handler=&quot;$(default_https_handler)&quot; || return 2
+  handler=&quot;$(/usr/bin/printf &#x27;%s&#x27; &quot;$handler&quot; | /usr/bin/tr &#x27;[:upper:]&#x27; &#x27;[:lower:]&#x27;)&quot;
+  [[ &quot;$handler&quot; == &quot;com.google.chrome&quot; ]]
+}
+
+# There is no public command-line API for querying Apple&#x27;s own Passwords
+# provider toggle. Read the Passwords provider checkbox only after positively
+# confirming that the AutoFill &amp; Passwords pane is visible. Never interpret the
+# same positional checkbox path while another System Settings pane is open.
+apple_passwords_provider_is_disabled() {
+  local checkbox_value
+  (( PASSWORDS_CONFIRMED == 1 )) &amp;&amp; return 0
+
+  checkbox_value=&quot;$(run_as_user /usr/bin/osascript &lt;&lt;&#x27;APPLESCRIPT&#x27; 2&gt;/dev/null
+tell application &quot;System Events&quot;
+  if not (exists process &quot;System Settings&quot;) then return &quot;unknown&quot;
+  tell process &quot;System Settings&quot;
+    set paneConfirmed to false
+    set allElements to {}
+
+    try
+      set allElements to entire contents of window 1
+    on error
+      return &quot;unknown&quot;
+    end try
+
+    -- The positional checkbox path is shared by unrelated Settings panes.
+    -- Confirm the correct pane from its window title or visible heading first.
+    try
+      set windowName to name of window 1 as text
+      if windowName contains &quot;AutoFill &amp; Passwords&quot; then set paneConfirmed to true
+    end try
+
+    if not paneConfirmed then
+      repeat with elementRef in allElements
+        try
+          set elementObject to contents of elementRef
+          set elementRole to role of elementObject as text
+          if elementRole is &quot;AXHeading&quot; or elementRole is &quot;AXStaticText&quot; then
+            set elementText to &quot;&quot;
+            try
+              set elementText to name of elementObject as text
+            end try
+            if elementText is &quot;AutoFill &amp; Passwords&quot; or elementText starts with &quot;AutoFill &amp; Passwords&quot; then
+              set paneConfirmed to true
+              exit repeat
+            end if
+          end if
+        end try
+      end repeat
+    end if
+
+    if not paneConfirmed then return &quot;unknown&quot;
+
+    -- Prefer a checkbox that Accessibility explicitly associates with the
+    -- Passwords provider. This deliberately does not match the global
+    -- &quot;AutoFill Passwords and Passkeys&quot; control.
+    repeat with elementRef in allElements
+      try
+        set elementObject to contents of elementRef
+        if role of elementObject is &quot;AXCheckBox&quot; then
+          set elementName to &quot;&quot;
+          set elementDescription to &quot;&quot;
+          try
+            set elementName to name of elementObject as text
+          end try
+          try
+            set elementDescription to description of elementObject as text
+          end try
+          if elementName is &quot;Passwords&quot; or elementName starts with &quot;Passwords &quot; or elementDescription is &quot;Passwords&quot; or elementDescription starts with &quot;Passwords &quot; then
+            return value of elementObject as text
+          end if
+        end if
+      end try
+    end repeat
+
+    -- The tested pane exposes an unlabelled provider checkbox at this path.
+    -- It is safe to use only after the pane confirmation above succeeds.
+    try
+      return value of checkbox 1 of group 2 of scroll area 1 of group 1 of group 3 of splitter group 1 of group 1 of window 1 as text
+    end try
+
+    return &quot;unknown&quot;
+  end tell
+end tell
+APPLESCRIPT
+)&quot;
+  if [[ &quot;$checkbox_value&quot; == &quot;0&quot; ]]; then
+    PASSWORDS_CONFIRMED=1
+    if [[ -n &quot;$PASSWORDS_MARKER&quot; ]]; then
+      /bin/mkdir -p &quot;${PASSWORDS_MARKER%/*}&quot;
+      /usr/bin/printf &#x27;%s\n&#x27; &quot;$PASSWORDS_MARKER_VALUE&quot; &gt; &quot;$PASSWORDS_MARKER&quot;
+      /usr/sbin/chown &quot;$CONSOLE_USER&quot; &quot;${PASSWORDS_MARKER%/*}&quot; &quot;$PASSWORDS_MARKER&quot; 2&gt;/dev/null || true
+    fi
+    return 0
+  fi
+  if [[ &quot;$checkbox_value&quot; == &quot;1&quot; ]]; then
+    [[ -n &quot;$PASSWORDS_MARKER&quot; ]] &amp;&amp; /bin/rm -f &quot;$PASSWORDS_MARKER&quot;
+    return 1
+  fi
+  return 2
+}
+
+all_requirements_pass_preflight() {
+  ncstreamer_is_enabled || return 1
+  location_services_is_enabled || return 1
+  chrome_is_default_browser || return 1
+  apple_passwords_provider_is_disabled || return 1
+  return 0
+}
+
+set_row() {
+  local index=&quot;$1&quot; rc=&quot;$2&quot; pass_text=&quot;$3&quot; fail_text=&quot;$4&quot; unknown_text=&quot;$5&quot;
+  case &quot;$rc&quot; in
+    0) dialog_command &quot;listitem: index: $index, status: success, statustext: $pass_text&quot; ;;
+    1) dialog_command &quot;listitem: index: $index, status: fail, statustext: $fail_text&quot; ;;
+    *) dialog_command &quot;listitem: index: $index, status: wait, statustext: $unknown_text&quot; ;;
+  esac
+}
+
+write_checklist_config() {
+  /bin/rm -f &quot;$PLIST_FILE&quot; &quot;$CONFIG_FILE&quot;
+  /usr/bin/plutil -create xml1 &quot;$PLIST_FILE&quot; || return 1
+  /usr/libexec/PlistBuddy -c &quot;Add :title string &#x27;$DIALOG_TITLE&#x27;&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :titlefont string &#x27;colour=white,size=36,weight=bold&#x27;&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :message string &#x27;$DIALOG_MESSAGE&#x27;&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :messagefont string &#x27;colour=white,size=18&#x27;&quot; &quot;$PLIST_FILE&quot;
+  if [[ -n &quot;$BRAND_ICON&quot; &amp;&amp; -r &quot;$BRAND_ICON&quot; ]]; then
+    /usr/libexec/PlistBuddy -c &quot;Add :icon string &#x27;$BRAND_ICON&#x27;&quot; &quot;$PLIST_FILE&quot;
+  else
+    /usr/libexec/PlistBuddy -c &quot;Add :icon string &#x27;$FALLBACK_ICON&#x27;&quot; &quot;$PLIST_FILE&quot;
+  fi
+  /usr/libexec/PlistBuddy -c &quot;Add :width integer 870&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :height integer 470&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :moveable bool true&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :windowbuttons string &#x27;close,min,max&#x27;&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :hidedefaultkeyboardaction bool true&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :button1text string none&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :commandfile string &#x27;$COMMAND_FILE&#x27;&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :liststyle string compact&quot; &quot;$PLIST_FILE&quot;
+  /usr/libexec/PlistBuddy -c &quot;Add :listitem array&quot; &quot;$PLIST_FILE&quot;
+
+  local titles=(&quot;Screen Access&quot; &quot;Location Services&quot; &quot;Default Browser&quot; &quot;Autofill &amp; Passwords&quot;)
+  local subtitles=(&quot;$INSTRUCTION_NCSTREAMER&quot; &quot;$INSTRUCTION_LOCATION&quot; &quot;$INSTRUCTION_BROWSER&quot; &quot;$INSTRUCTION_PASSWORDS&quot;)
+  local urls=(&quot;$NCSTREAMER_SETTINGS_URL&quot; &quot;$LOCATION_SETTINGS_URL&quot; &quot;$BROWSER_SETTINGS_URL&quot; &quot;$PASSWORDS_SETTINGS_URL&quot;)
+  local i
+  for i in 0 1 2 3; do
+    /usr/libexec/PlistBuddy -c &quot;Add :listitem:$i dict&quot; &quot;$PLIST_FILE&quot;
+    /usr/libexec/PlistBuddy -c &quot;Add :listitem:$i:title string &#x27;${titles[$i]}&#x27;&quot; &quot;$PLIST_FILE&quot;
+    /usr/libexec/PlistBuddy -c &quot;Add :listitem:$i:subtitle string &#x27;${subtitles[$i]}&#x27;&quot; &quot;$PLIST_FILE&quot;
+    /usr/libexec/PlistBuddy -c &quot;Add :listitem:$i:status string wait&quot; &quot;$PLIST_FILE&quot;
+    /usr/libexec/PlistBuddy -c &quot;Add :listitem:$i:statustext string &#x27;Checking&#x27;&quot; &quot;$PLIST_FILE&quot;
+    /usr/libexec/PlistBuddy -c &quot;Add :listitem:$i:action string &#x27;${urls[$i]}&#x27;&quot; &quot;$PLIST_FILE&quot;
+  done
+
+  if [[ -n &quot;$BACKGROUND_IMAGE&quot; &amp;&amp; -r &quot;$BACKGROUND_IMAGE&quot; ]]; then
+    /usr/libexec/PlistBuddy -c &quot;Add :background string &#x27;$BACKGROUND_IMAGE&#x27;&quot; &quot;$PLIST_FILE&quot;
+    /usr/libexec/PlistBuddy -c &quot;Add :bgalpha real 1.0&quot; &quot;$PLIST_FILE&quot;
+    /usr/libexec/PlistBuddy -c &quot;Add :bgfill string fill&quot; &quot;$PLIST_FILE&quot;
+  fi
+  if [[ -n &quot;$OPENING_SOUND&quot; &amp;&amp; -r &quot;$OPENING_SOUND&quot; ]]; then
+    /usr/libexec/PlistBuddy -c &quot;Add :sound string &#x27;$OPENING_SOUND&#x27;&quot; &quot;$PLIST_FILE&quot;
+  fi
+
+  /usr/bin/plutil -convert json -o &quot;$CONFIG_FILE&quot; &quot;$PLIST_FILE&quot; || return 1
+  [[ -s &quot;$CONFIG_FILE&quot; ]] || return 1
+}
+
+main() {
+  [[ -x &quot;$DIALOG_BIN&quot; ]] || {
+    /usr/bin/printf &#x27;swiftDialog was not found at %s\n&#x27; &quot;$DIALOG_BIN&quot; &gt;&amp;2
+    return 1
+  }
+
+  CONSOLE_USER=&quot;$(console_user)&quot;
+  [[ -n &quot;$CONSOLE_USER&quot; &amp;&amp; &quot;$CONSOLE_USER&quot; != &quot;root&quot; &amp;&amp; &quot;$CONSOLE_USER&quot; != &quot;loginwindow&quot; ]] || {
+    /usr/bin/printf &#x27;No signed-in GUI user was found.\n&#x27; &gt;&amp;2
+    return 1
+  }
+  CONSOLE_UID=&quot;$(/usr/bin/id -u &quot;$CONSOLE_USER&quot;)&quot;
+  USER_HOME=&quot;$(/usr/bin/dscl . -read &quot;/Users/$CONSOLE_USER&quot; NFSHomeDirectory 2&gt;/dev/null | /usr/bin/awk &#x27;{print $2}&#x27;)&quot;
+  [[ -n &quot;$USER_HOME&quot; ]] || USER_HOME=&quot;/Users/$CONSOLE_USER&quot;
+  PASSWORDS_MARKER=&quot;$USER_HOME/Library/Application Support/Tow Foundation/.apple-passwords-autofill-disabled&quot;
+  if [[ -f &quot;$PASSWORDS_MARKER&quot; ]] &amp;&amp; \
+     [[ &quot;$(/bin/cat &quot;$PASSWORDS_MARKER&quot; 2&gt;/dev/null)&quot; == &quot;$PASSWORDS_MARKER_VALUE&quot; ]]; then
+    PASSWORDS_CONFIRMED=1
+  fi
+
+  # Do not create files or launch swiftDialog when every requirement already
+  # passes. This keeps login runs completely silent on configured Macs.
+  all_requirements_pass_preflight &amp;&amp; return 0
+
+  COMMAND_FILE=&quot;/var/tmp/com.agilant.setup-assistant.${CONSOLE_UID}.$$.command&quot;
+  PLIST_FILE=&quot;/var/tmp/com.agilant.setup-assistant.${CONSOLE_UID}.$$.plist&quot;
+  CONFIG_FILE=&quot;/var/tmp/com.agilant.setup-assistant.${CONSOLE_UID}.$$.json&quot;
+  /usr/bin/touch &quot;$COMMAND_FILE&quot;
+  /usr/sbin/chown &quot;$CONSOLE_USER&quot; &quot;$COMMAND_FILE&quot; 2&gt;/dev/null || true
+
+  remediate_ncstreamer || true
+  : &gt; &quot;$COMMAND_FILE&quot;
+  write_checklist_config || {
+    /usr/bin/printf &#x27;Unable to create a valid swiftDialog JSON configuration.\n&#x27; &gt;&amp;2
+    return 1
+  }
+  /usr/sbin/chown &quot;$CONSOLE_USER&quot; &quot;$CONFIG_FILE&quot; 2&gt;/dev/null || true
+
+  run_as_user &quot;$DIALOG_BIN&quot; --jsonfile &quot;$CONFIG_FILE&quot; &amp;
+  DIALOG_PID=$!
+  /bin/sleep 0.25
+  # Reassert the message after the list view finishes constructing. This avoids
+  # a swiftDialog 3.1 layout race that can collapse the initial message area.
+  dialog_command &quot;message: $DIALOG_MESSAGE&quot;
+
+  while /bin/kill -0 &quot;$DIALOG_PID&quot; 2&gt;/dev/null; do
+    local nc_rc=2 location_rc=2 browser_rc=2 passwords_rc=2 complete=0
+    ncstreamer_is_enabled; nc_rc=$?
+    location_services_is_enabled; location_rc=$?
+    chrome_is_default_browser; browser_rc=$?
+    apple_passwords_provider_is_disabled; passwords_rc=$?
+
+    set_row 0 &quot;$nc_rc&quot; &quot;Allowed&quot; &quot;Click to configure&quot; &quot;Unable to verify&quot;
+    set_row 1 &quot;$location_rc&quot; &quot;Enabled&quot; &quot;Click to configure&quot; &quot;Unable to verify&quot;
+    set_row 2 &quot;$browser_rc&quot; &quot;Chrome selected&quot; &quot;Click to configure&quot; &quot;Unable to verify&quot;
+    set_row 3 &quot;$passwords_rc&quot; &quot;Passwords off&quot; &quot;Click to configure&quot; &quot;Click to open Settings &amp; verify&quot;
+    (( nc_rc == 0 )) &amp;&amp; (( complete++ ))
+    (( location_rc == 0 )) &amp;&amp; (( complete++ ))
+    (( browser_rc == 0 )) &amp;&amp; (( complete++ ))
+    (( passwords_rc == 0 )) &amp;&amp; (( complete++ ))
+
+    if (( complete == 4 )); then
+      /bin/sleep 1
+      dialog_command &quot;quit:&quot;
+      break
+    fi
+    /bin/sleep &quot;$POLL_SECONDS&quot;
+  done
+
+  wait &quot;$DIALOG_PID&quot; 2&gt;/dev/null
+  DIALOG_PID=&quot;&quot;
+}
+
+main &quot;$@&quot;</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

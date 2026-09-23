@@ -1,0 +1,73 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>macOS Standard User Printer Control | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>macOS Standard User Printer Control</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Allows standard macOS users to perform printer add/remove operations governed by the local authorization right system.preferences.printing without administrator authentication.</p><p>The script is intended for root execution through NinjaOne. Before changing the Authorization Database, it creates a one-time backup of the existing authorization rule for rollback or forensic comparison.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Defines the target authorization right as system.preferences.printing. This is the only Authorization Database right the script intentionally modifies.</p><p>Defines a protected backup location at /Library/Application Support/Agilant/AuthorizationDB Backups/system.preferences.printing.plist.</p><p>Requires root execution by checking id -u. A non-root run prints an error and exits with status 1.</p><p>Creates /Library/Application Support/Agilant/AuthorizationDB Backups if it does not already exist and applies mode 700 to the directory.</p><p>Backs up the current authorization rule only when no non-empty backup file already exists. The existing rule is read with security authorizationdb read system.preferences.printing and written to the backup plist.</p><p>Validates the backup with plutil -lint. An unreadable or invalid backup is deleted and the script exits rather than modifying the live authorization rule.</p><p>Applies mode 600 to the successful backup and intentionally leaves any later existing backup untouched so the original captured rule is not overwritten.</p><p>Changes the live authorization rule with security authorizationdb write system.preferences.printing allow. This replaces the right&#x27;s current policy with the literal authorization result allow.</p><p>Verifies the live rule by reading it back and requiring the output to contain &lt;string&gt;allow&lt;/string&gt;. Verification success exits with status 0; failure exits with status 1.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>This script provides a direct local fallback for environments where standard users need to add or remove printers without administrator credentials and a managed printing configuration alone is not producing the required behavior.</p><p>Unlike a normal configuration profile, this script modifies the Mac&#x27;s local Authorization Database directly. That makes it useful as a compatibility or remediation mechanism, but also makes it a broader and more persistent change.</p></div></details><details><summary>Relationship To User Printer Access Payload</summary><div class="section-body"><p>Tow&#x27;s existing User Printer Access configuration profile already sets the managed Printing payload so users can modify printers without an administrator requirement, including RequireAdminToAddPrinters = false, RequireAdminToPrintLocally = false, AllowLocalPrinters = true, and ShowOnlyManagedPrinters = false.</p><p>Preferred design: use the managed Printing payload by itself when it successfully provides the required standard-user printer workflow. It is declarative, visible in MDM, removable, and easier to audit than an Authorization Database rewrite.</p><p>FALLBACK USE CASE  Keep or deploy this script only if testing shows that a standard user still receives an administrator prompt for an add/remove operation that is controlled by system.preferences.printing despite the managed Printing payload.</p><p>IMPORTANT DIFFERENCE  The two methods are not exact duplicates internally. The payload configures Apple&#x27;s managed printing policy; this script forcibly rewrites the local authorization right to allow. Running both can make the script appear necessary even when the profile would have been sufficient, because the Authorization Database change can mask the profile&#x27;s actual behavior.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout danger">IMPORTANT CAVEAT  This script makes a persistent local Authorization Database change. Removing the MDM Printing profile later does not automatically restore the original system.preferences.printing rule.</div><p>ROLLBACK NOTE  The script creates a one-time backup of the original right, but it does not contain rollback logic. Restoring the prior rule requires a separate administrative action that writes the saved plist back to system.preferences.printing.</p><div class="callout danger">SECURITY NOTE  Writing the authorization right as the literal rule allow is broader than simply expressing a managed preference. Any local user subject to that Authorization Database right can satisfy it without administrator authentication until the rule is restored or changed.</div><div class="callout warning">OPERATIONAL NOTE  Because the backup is preserved after the first successful capture, later legitimate changes to Apple&#x27;s or the organization&#x27;s authorization rule are not reflected in the stored rollback copy.</div><p>The script does not install printer drivers, create queues, configure printer addresses, or determine which printers a user should add. Those functions remain separate from this authorization change.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">MacOS_Standard_User_Printer_Control.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="MacOS_Standard_User_Printer_Control.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+# Allow Standard Users to Administer Printers
+# Intended for deployment as root via NinjaOne.
+#
+# This changes ONLY the macOS authorization right:
+#   system.preferences.printing
+#
+# Apple documents this right as allowing an account to add or remove printers.
+# The original rule is backed up once for rollback.
+
+RIGHT=&quot;system.preferences.printing&quot;
+BACKUP_DIR=&quot;/Library/Application Support/Agilant/AuthorizationDB Backups&quot;
+BACKUP_FILE=&quot;${BACKUP_DIR}/${RIGHT}.plist&quot;
+
+echo &quot;=== Printer Authorization Configuration ===&quot;
+
+# Must run as root.
+if [ &quot;$(id -u)&quot; -ne 0 ]; then
+    echo &quot;ERROR: This script must run as root.&quot;
+    exit 1
+fi
+
+# Create protected backup directory.
+if [ ! -d &quot;$BACKUP_DIR&quot; ]; then
+    /bin/mkdir -p &quot;$BACKUP_DIR&quot; || {
+        echo &quot;ERROR: Could not create backup directory.&quot;
+        exit 1
+    }
+    /bin/chmod 700 &quot;$BACKUP_DIR&quot;
+fi
+
+# Back up the original authorization rule only once.
+if [ ! -s &quot;$BACKUP_FILE&quot; ]; then
+    echo &quot;Backing up existing authorization rule...&quot;
+
+    if ! /usr/bin/security authorizationdb read &quot;$RIGHT&quot; &gt; &quot;$BACKUP_FILE&quot; 2&gt;/dev/null; then
+        echo &quot;ERROR: Could not read $RIGHT from the Authorization Database.&quot;
+        /bin/rm -f &quot;$BACKUP_FILE&quot;
+        exit 1
+    fi
+
+    if ! /usr/bin/plutil -lint &quot;$BACKUP_FILE&quot; &gt;/dev/null 2&gt;&amp;1; then
+        echo &quot;ERROR: Authorization rule backup was not a valid plist.&quot;
+        /bin/rm -f &quot;$BACKUP_FILE&quot;
+        exit 1
+    fi
+
+    /bin/chmod 600 &quot;$BACKUP_FILE&quot;
+    echo &quot;Original rule backed up to:&quot;
+    echo &quot;$BACKUP_FILE&quot;
+else
+    echo &quot;Existing backup found; leaving it untouched.&quot;
+fi
+
+# Allow the authorization right without admin authentication.
+echo &quot;Allowing standard users to administer printers...&quot;
+
+if ! /usr/bin/security authorizationdb write &quot;$RIGHT&quot; allow &gt;/dev/null 2&gt;&amp;1; then
+    echo &quot;ERROR: Failed to modify $RIGHT.&quot;
+    exit 1
+fi
+
+# Verify the authorization rule now resolves to allow.
+if /usr/bin/security authorizationdb read &quot;$RIGHT&quot; 2&gt;/dev/null | /usr/bin/grep -q &#x27;&lt;string&gt;allow&lt;/string&gt;&#x27;; then
+    echo &quot;SUCCESS: $RIGHT is now set to allow.&quot;
+    echo &quot;Standard users can perform printer add/remove operations governed by this right.&quot;
+    exit 0
+else
+    echo &quot;ERROR: The Authorization Database did not verify as expected.&quot;
+    exit 1
+fi
+</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

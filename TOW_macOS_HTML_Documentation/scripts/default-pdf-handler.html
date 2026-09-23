@@ -1,0 +1,245 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Prompt User to Set Adobe as Default PDF Handler | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Prompt User to Set Adobe as Default PDF Handler</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Sets Adobe Acrobat or Adobe Acrobat Reader as the default application used to open PDF files for the currently signed-in macOS user.</p><p>The workflow is intended to mirror the user-facing result of Finder&#x27;s Get Info &gt; Open with &gt; Adobe Acrobat/Reader &gt; Change All action. The script requests the association change through AppKit/NSWorkspace in the user&#x27;s graphical session and then verifies whether Launch Services actually accepted the new handler.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Runs under #!/bin/bash and is intended for root execution through NinjaOne on macOS 12 or later.</p><p>Determines the active console user with stat -f &quot;%Su&quot; /dev/console. An empty value, root, or loginwindow is treated as no valid desktop user and causes an exit with status 1.</p><p>Resolves the user&#x27;s numeric UID with id -u and defines a run_as_console_user() helper that uses launchctl asuser plus sudo -H -u so Launch Services operations occur inside the signed-in user&#x27;s session.</p><p>Searches for Adobe in a fixed preference order and selects the first valid application bundle found. The current order is: /Applications/Adobe Acrobat.app, /Applications/Adobe Acrobat Reader.app, /Applications/Adobe Acrobat Reader DC.app, /Applications/Adobe Reader.app, then /Applications/Adobe Acrobat DC/Adobe Acrobat.app.</p><p>Prefers the full Adobe Acrobat application when both Acrobat and Reader are installed because /Applications/Adobe Acrobat.app appears first in the candidate list.</p><p>Reads the selected application&#x27;s CFBundleIdentifier and display name from Contents/Info.plist using PlistBuddy. If the display-name keys are unavailable, it falls back to the application bundle&#x27;s filename.</p><p>Creates a private temporary working directory under /private/tmp/set-adobe-default-pdf.XXXXXX and registers an EXIT/HUP/INT/TERM cleanup trap that removes the directory when the script finishes.</p><p>Builds a tiny local sample file named default-handler-test.pdf. The file contains no user or client data and exists only so NSWorkspace can resolve the PDF content type and current application handler.</p><p>Creates an AppleScriptObjC query helper that asks NSWorkspace for the application currently associated with the sample PDF, then returns that application&#x27;s bundle identifier.</p><p>Changes ownership of the temporary working directory to the signed-in user and applies u+rwX,go+rX permissions so the query/helper files are accessible from that user&#x27;s graphical session.</p><p>Queries the current PDF handler before making any change. If it already matches the discovered Adobe bundle identifier, the script exits successfully without displaying a confirmation prompt or compiling the setter helper.</p><p>If Adobe is not already the handler, generates a temporary AppleScriptObjC application that requests NSWorkspace to make the selected Adobe application the default opener for the PDF content type represented by the sample file.</p><p>The setter calls setDefaultApplicationAtURL:toOpenContentTypeOfFileAtURL:completionHandler: and activates itself as a regular GUI application so macOS can present its native default-file-opener confirmation dialog when consent is required.</p><p>While the native confirmation is pending, the helper keeps its GUI process alive and re-checks the PDF handler up to 240 times at 0.25-second intervals. This provides a maximum wait of approximately 60 seconds and allows the helper to exit early as soon as Launch Services reports Adobe as the handler.</p><p>Compiles the helper into Set Adobe as Default PDF Viewer.app with osacompile and launches it in the signed-in user&#x27;s session using open -W -n.</p><p>When macOS displays the native confirmation, the user can choose whether to switch PDF files to the selected Adobe application or keep the existing handler, such as Preview. The script itself does not fabricate this dialog; the prompt is supplied by macOS.</p><p>After the helper closes, the script independently queries the PDF handler again rather than assuming the request succeeded.</p><p>Returns exit 0 only when the verified post-change handler matches the selected Adobe application&#x27;s bundle identifier. If the user dismisses/rejects the prompt or the association does not change before the helper finishes, the script returns exit 2.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>The script standardizes the application used when users open PDF documents, moving that file association from Apple&#x27;s Preview or another registered viewer to the organization&#x27;s installed Adobe Acrobat/Reader application.</p><p>Using the NSWorkspace API avoids directly rewriting Launch Services preference files, while the before/after checks provide a verifiable result for the deployment workflow.</p><p>The user confirmation is intentional. For file-handler changes such as PDFs, macOS presents its own small confirmation window asking whether the user wants to use the new application or retain the current one. This preserves Apple&#x27;s user-consent behavior while still allowing the management workflow to initiate the requested change.</p></div></details><details><summary>Relationship To Link Handlers</summary><div class="section-body"><p>IMPORTANT DISTINCTION  This workflow changes a file association for PDFs. It does not configure URL/link handlers such as mailto:, tel:, or callto:.</p><p>In the current Tow workflow, file-handler changes such as .pdf and .eml can trigger the native macOS confirmation prompt, while the separate link-handler automations do not present that same file-opener confirmation behavior.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout warning">OPERATIONAL NOTE  At least one supported Adobe application must exist at one of the hard-coded candidate paths. The script does not search arbitrary folders or user-local Applications directories.</div><div class="callout warning">OPERATIONAL NOTE  Because the script discovers the application&#x27;s actual CFBundleIdentifier from its Info.plist, it can support multiple Acrobat/Reader package layouts without hard-coding one Adobe bundle identifier.</div><div class="callout danger">IMPORTANT CAVEAT  The user can explicitly decline or dismiss the native macOS confirmation. In that case the script leaves the existing PDF handler in place and exits with status 2 rather than forcing the association.</div><div class="callout danger">IMPORTANT CAVEAT  The helper waits for approximately 60 seconds at most. If the user does not respond before the helper closes, the subsequent verification can report that the handler was not changed.</div><div class="callout warning">OPERATIONAL NOTE  The script logs which Adobe product and bundle identifier it discovered, but the exact application selected depends on what is installed and on the candidate-path priority defined in the script.</div><p>The script does not install Adobe, update Adobe, modify PDF content, or directly edit Launch Services database/preference files. Its scope is limited to requesting and verifying the signed-in user&#x27;s default PDF opener.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Prompts_User_to_Set_Adobe_to_Default_PDF_Handler.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Prompts_User_to_Set_Adobe_to_Default_PDF_Handler.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+# Sets Adobe Acrobat or Adobe Acrobat Reader as the default application for
+# PDF files for the currently signed-in macOS user. This is equivalent to
+# Finder &gt; Get Info &gt; Open with &gt; Adobe Acrobat/Reader &gt; Change All.
+#
+# Intended for execution by NinjaOne as root on macOS 12 or later.
+
+PATH=&quot;/usr/bin:/bin:/usr/sbin:/sbin&quot;
+
+log() {
+    /bin/echo &quot;[DefaultPDF] $*&quot;
+}
+
+console_user=$(/usr/bin/stat -f &quot;%Su&quot; /dev/console 2&gt;/dev/null)
+
+if [ -z &quot;$console_user&quot; ] || [ &quot;$console_user&quot; = &quot;root&quot; ] || [ &quot;$console_user&quot; = &quot;loginwindow&quot; ]; then
+    log &quot;No signed-in desktop user was found.&quot;
+    exit 1
+fi
+
+console_uid=$(/usr/bin/id -u &quot;$console_user&quot; 2&gt;/dev/null)
+
+if [ -z &quot;$console_uid&quot; ]; then
+    log &quot;Could not determine the UID for $console_user.&quot;
+    exit 1
+fi
+
+run_as_console_user() {
+    /bin/launchctl asuser &quot;$console_uid&quot; /usr/bin/sudo -H -u &quot;$console_user&quot; &quot;$@&quot;
+}
+
+# Prefer the full Acrobat application when both Acrobat and Reader happen to
+# be installed. The remaining paths cover current and older Reader packages.
+target_app=&quot;&quot;
+
+for candidate_app in \
+    &quot;/Applications/Adobe Acrobat.app&quot; \
+    &quot;/Applications/Adobe Acrobat Reader.app&quot; \
+    &quot;/Applications/Adobe Acrobat Reader DC.app&quot; \
+    &quot;/Applications/Adobe Reader.app&quot; \
+    &quot;/Applications/Adobe Acrobat DC/Adobe Acrobat.app&quot;
+do
+    if [ -d &quot;$candidate_app&quot; ] &amp;&amp; [ -f &quot;$candidate_app/Contents/Info.plist&quot; ]; then
+        target_app=&quot;$candidate_app&quot;
+        break
+    fi
+done
+
+if [ -z &quot;$target_app&quot; ]; then
+    log &quot;Adobe Acrobat or Adobe Acrobat Reader was not found in /Applications.&quot;
+    exit 1
+fi
+
+target_plist=&quot;$target_app/Contents/Info.plist&quot;
+target_bundle_id=$(/usr/libexec/PlistBuddy -c &quot;Print :CFBundleIdentifier&quot; &quot;$target_plist&quot; 2&gt;/dev/null)
+target_name=$(/usr/libexec/PlistBuddy -c &quot;Print :CFBundleDisplayName&quot; &quot;$target_plist&quot; 2&gt;/dev/null)
+
+if [ -z &quot;$target_name&quot; ]; then
+    target_name=$(/usr/libexec/PlistBuddy -c &quot;Print :CFBundleName&quot; &quot;$target_plist&quot; 2&gt;/dev/null)
+fi
+
+if [ -z &quot;$target_name&quot; ]; then
+    target_name=$(/usr/bin/basename &quot;$target_app&quot; .app)
+fi
+
+if [ -z &quot;$target_bundle_id&quot; ]; then
+    log &quot;Could not read the Adobe application&#x27;s bundle identifier.&quot;
+    exit 1
+fi
+
+log &quot;Signed-in user: $console_user&quot;
+log &quot;Adobe application: $target_name&quot;
+log &quot;Adobe bundle identifier: $target_bundle_id&quot;
+
+working_directory=$(/usr/bin/mktemp -d &quot;/private/tmp/set-adobe-default-pdf.XXXXXX&quot;)
+
+if [ -z &quot;$working_directory&quot; ] || [ ! -d &quot;$working_directory&quot; ]; then
+    log &quot;Could not create a temporary working directory.&quot;
+    exit 1
+fi
+
+cleanup() {
+    if [ -n &quot;$working_directory&quot; ] &amp;&amp; [ -d &quot;$working_directory&quot; ]; then
+        /bin/rm -rf &quot;$working_directory&quot;
+    fi
+}
+
+trap cleanup EXIT HUP INT TERM
+
+sample_pdf=&quot;$working_directory/default-handler-test.pdf&quot;
+query_source=&quot;$working_directory/query-handler.applescript&quot;
+helper_source=&quot;$working_directory/set-handler.applescript&quot;
+helper_app=&quot;$working_directory/Set Adobe as Default PDF Viewer.app&quot;
+compile_output=&quot;$working_directory/compile-output.txt&quot;
+
+# This tiny sample is used only so NSWorkspace can resolve the PDF content
+# type. It contains no user or client data.
+/bin/cat &gt; &quot;$sample_pdf&quot; &lt;&lt;&#x27;PDF&#x27;
+%PDF-1.1
+1 0 obj
+&lt;&lt; /Type /Catalog /Pages 2 0 R &gt;&gt;
+endobj
+2 0 obj
+&lt;&lt; /Type /Pages /Kids [3 0 R] /Count 1 &gt;&gt;
+endobj
+3 0 obj
+&lt;&lt; /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] &gt;&gt;
+endobj
+xref
+0 4
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+trailer
+&lt;&lt; /Root 1 0 R /Size 4 &gt;&gt;
+startxref
+190
+%%EOF
+PDF
+
+/bin/cat &gt; &quot;$query_source&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27;
+use framework &quot;AppKit&quot;
+use framework &quot;Foundation&quot;
+
+on run arguments
+    if (count of arguments) is not 1 then return &quot;&quot;
+
+    set samplePath to item 1 of arguments
+    set sampleURL to current application&#x27;s NSURL&#x27;s fileURLWithPath:samplePath
+    set workspace to current application&#x27;s NSWorkspace&#x27;s sharedWorkspace()
+    set applicationURL to workspace&#x27;s URLForApplicationToOpenURL:sampleURL
+
+    if applicationURL is missing value then return &quot;&quot;
+
+    set applicationBundle to current application&#x27;s NSBundle&#x27;s bundleWithURL:applicationURL
+    if applicationBundle is missing value then return &quot;&quot;
+
+    set bundleIdentifier to applicationBundle&#x27;s bundleIdentifier()
+    if bundleIdentifier is missing value then return &quot;&quot;
+
+    return bundleIdentifier as text
+end run
+APPLESCRIPT
+
+if ! /usr/sbin/chown -R &quot;$console_uid&quot; &quot;$working_directory&quot;; then
+    log &quot;Could not prepare the temporary files for $console_user.&quot;
+    exit 1
+fi
+
+/bin/chmod -R u+rwX,go+rX &quot;$working_directory&quot;
+
+current_pdf_handler() {
+    run_as_console_user /usr/bin/osascript &quot;$query_source&quot; &quot;$sample_pdf&quot; 2&gt;/dev/null
+}
+
+handler_before=$(current_pdf_handler)
+
+if [ -z &quot;$handler_before&quot; ]; then
+    handler_before=&quot;(none)&quot;
+fi
+
+log &quot;Current PDF handler: $handler_before&quot;
+
+if [ &quot;$handler_before&quot; = &quot;$target_bundle_id&quot; ]; then
+    log &quot;$target_name is already the default application for PDF files.&quot;
+    exit 0
+fi
+
+/bin/cat &gt; &quot;$helper_source&quot; &lt;&lt;APPLESCRIPT
+use framework &quot;AppKit&quot;
+use framework &quot;Foundation&quot;
+use scripting additions
+
+on run
+    set applicationObject to current application&#x27;s NSApplication&#x27;s sharedApplication()
+    applicationObject&#x27;s setActivationPolicy:(current application&#x27;s NSApplicationActivationPolicyRegular)
+    applicationObject&#x27;s activateIgnoringOtherApps:true
+
+    set workspace to current application&#x27;s NSWorkspace&#x27;s sharedWorkspace()
+    set adobeURL to current application&#x27;s NSURL&#x27;s fileURLWithPath:&quot;$target_app&quot;
+    set pdfFileURL to current application&#x27;s NSURL&#x27;s fileURLWithPath:&quot;$sample_pdf&quot;
+
+    workspace&#x27;s setDefaultApplicationAtURL:adobeURL ¬
+        toOpenContentTypeOfFileAtURL:pdfFileURL ¬
+        completionHandler:(missing value)
+
+    -- Keep the GUI process alive so macOS can display and process its native
+    -- default-file-opener confirmation if consent is required. Quit early as
+    -- soon as Launch Services reports Adobe as the new handler.
+    repeat with attemptNumber from 1 to 240
+        set handlerURL to workspace&#x27;s URLForApplicationToOpenURL:pdfFileURL
+
+        if handlerURL is not missing value then
+            set handlerBundle to current application&#x27;s NSBundle&#x27;s bundleWithURL:handlerURL
+
+            if handlerBundle is not missing value then
+                set handlerID to handlerBundle&#x27;s bundleIdentifier()
+
+                if handlerID is not missing value then
+                    if (handlerID as text) is &quot;$target_bundle_id&quot; then exit repeat
+                end if
+            end if
+        end if
+
+        set nextCheck to current application&#x27;s NSDate&#x27;s dateWithTimeIntervalSinceNow:0.25
+        current application&#x27;s NSRunLoop&#x27;s currentRunLoop()&#x27;s runUntilDate:nextCheck
+    end repeat
+end run
+APPLESCRIPT
+
+log &quot;Building temporary NSWorkspace helper.&quot;
+
+if ! run_as_console_user /usr/bin/osacompile -o &quot;$helper_app&quot; &quot;$helper_source&quot; &gt;&quot;$compile_output&quot; 2&gt;&amp;1; then
+    log &quot;The temporary helper could not be built.&quot;
+    /bin/cat &quot;$compile_output&quot;
+    exit 1
+fi
+
+log &quot;Requesting $target_name as the default PDF viewer.&quot;
+log &quot;macOS may ask the user to confirm the Change All request.&quot;
+
+if ! run_as_console_user /usr/bin/open -W -n &quot;$helper_app&quot;; then
+    log &quot;The NSWorkspace helper did not complete successfully.&quot;
+    exit 1
+fi
+
+handler_after=$(current_pdf_handler)
+
+if [ -z &quot;$handler_after&quot; ]; then
+    handler_after=&quot;(none)&quot;
+fi
+
+log &quot;PDF handler after the request: $handler_after&quot;
+
+if [ &quot;$handler_after&quot; = &quot;$target_bundle_id&quot; ]; then
+    log &quot;Success: $target_name is now the default application for PDF files.&quot;
+    exit 0
+fi
+
+log &quot;The PDF handler was not changed to $target_name.&quot;
+log &quot;The user may have dismissed the confirmation or not responded before the helper closed.&quot;
+log &quot;No Launch Services preference files were modified directly.&quot;
+exit 2</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

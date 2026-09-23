@@ -1,0 +1,106 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TTF Wallpaper Installation Scripts | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>TTF Wallpaper Installation Scripts</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Install Dark Blue TTF Wallpaper</button><button class="tab" data-view="source2">Install White Light TTF Wallpaper</button><button class="tab" data-view="source3">Install White Medium TTF Wallpaper</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Set Purpose</summary><div class="section-body"><p>Provides three nearly identical macOS wallpaper-installation scripts used to apply Tow Foundation branded desktop backgrounds to the currently logged-in user.</p><p>All three scripts use the same execution logic. The only functional difference is the exact WALLPAPER_PATH value, which selects the dark, light, or medium wallpaper asset.</p></div></details><details open><summary>Script Variants</summary><div class="section-body"><p>Install_Dark_Blue_TTF_Wallpaper.zsh -&gt; /Users/Shared/Tow Foundation/TTF-Wallpaper-Dark-full.PNG</p><p>Install_White_Light_TTF_Wallpaper.zsh -&gt; /Users/Shared/Tow Foundation/TTF-Wallpaper-Light-full.PNG</p><p>Install_White_Medium_TTF_Wallpaper.zsh -&gt; /Users/Shared/Tow Foundation/TTF-Wallpaper-Medium-full.PNG</p></div></details><details><summary>How It Functions</summary><div class="section-body"><p>Runs under /bin/zsh and enables set -euo pipefail. The script therefore exits on an unhandled command failure, treats unset variables as errors, and propagates failures from commands executed in a pipeline.</p><p>Defines the selected branded image through the WALLPAPER_PATH variable. Each script points to one pre-staged PNG inside /Users/Shared/Tow Foundation.</p><p>Runs chmod 644 &quot;$WALLPAPER_PATH&quot; so the wallpaper file is readable by all local users while remaining writable only according to its ownership and the normal meaning of mode 644.</p><p>Checks whether the wallpaper exists with [[ ! -f &quot;$WALLPAPER_PATH&quot; ]]. If that branch is reached, the script prints Wallpaper file not found: ... and exits with status 1.</p><p>Determines the active console user with /usr/bin/stat -f%Su /dev/console and stores the result in CONSOLE_USER.</p><p>Treats an empty username, root, or loginwindow as no usable interactive session. In that state the script reports that the wallpaper file is present but no user session can be updated, then exits with status 0.</p><p>Resolves the logged-in user&#x27;s numeric UID with /usr/bin/id -u &quot;$CONSOLE_USER&quot; and stores it in CONSOLE_UID.</p><p>Uses /bin/launchctl asuser together with /usr/bin/sudo -u so the subsequent AppleScript executes inside the logged-in user&#x27;s session rather than merely in the script runner&#x27;s context.</p><p>Passes the wallpaper path into /usr/bin/osascript and tells System Events to set the picture property for every desktop to the selected PNG.</p><p>Prints Wallpaper applied for &lt;user&gt;. after the AppleScript completes successfully.</p></div></details><details><summary>Why These Scripts Are Deployed</summary><div class="section-body"><p>These scripts provide a simple way to apply one of the approved Tow Foundation wallpaper variants after the corresponding image asset has already been placed on the Mac.</p><p>Keeping the three visual themes as separate scripts allows the deployment workflow to select a specific wallpaper without changing the underlying application logic. The dark, light, and medium scripts remain behaviorally consistent while differing only in the referenced image file.</p><p>Because the wallpaper change is executed in the active user&#x27;s session, the script can update that user&#x27;s desktop configuration even when the management action itself is launched from a different execution context.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout warning">OPERATIONAL WARNING  The wallpaper image must already exist at the exact configured path before the script runs. These scripts do not download or create the PNG files.</div><div class="callout danger">IMPORTANT CAVEAT  The script runs chmod 644 before it performs the explicit -f existence check. Because set -e is enabled, a completely missing wallpaper file causes chmod to fail and terminate the script immediately. In that case the later custom Wallpaper file not found branch will not execute.</div><div class="callout warning">OPERATIONAL NOTE  If no usable console user is logged in, the script exits with status 0 after confirming the file is present. This means the run can be reported as successful even though no wallpaper was actually applied during that execution.</div><div class="callout danger">IMPORTANT CAVEAT  Each run targets only the user represented by /dev/console at execution time. The scripts do not iterate through every local account or preconfigure wallpaper for users who are not currently signed in.</div><p>The AppleScript targets every desktop for the active user, so the selected image is applied across that user&#x27;s currently represented desktop spaces/displays handled by System Events during execution.</p><p>If the shared storage path, image filename, branding asset, or deployment workflow changes, the corresponding WALLPAPER_PATH value must be updated in the affected script.</p><p>These three scripts are intentionally documented together because their control flow is identical. Their separate script files exist only to select different Tow Foundation wallpaper assets.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Install Dark Blue TTF Wallpaper</div><div class="code-file">Install_Dark_Blue_TTF_Wallpaper.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Install_Dark_Blue_TTF_Wallpaper.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/zsh
+# Set the current logged-in user&#x27;s desktop wallpaper.
+# Store the image at the path below before running this script.
+
+set -euo pipefail
+
+WALLPAPER_PATH=&quot;/Users/Shared/Tow Foundation/TTF-Wallpaper-Dark-full.PNG&quot;
+chmod 644 &quot;$WALLPAPER_PATH&quot;
+
+if [[ ! -f &quot;$WALLPAPER_PATH&quot; ]]; then
+  echo &quot;Wallpaper file not found: $WALLPAPER_PATH&quot;
+  exit 1
+fi
+
+CONSOLE_USER=&quot;$(/usr/bin/stat -f%Su /dev/console)&quot;
+if [[ -z &quot;$CONSOLE_USER&quot; || &quot;$CONSOLE_USER&quot; == &quot;root&quot; || &quot;$CONSOLE_USER&quot; == &quot;loginwindow&quot; ]]; then
+  echo &quot;No logged-in user. The wallpaper file is present, but there is no user session to update.&quot;
+  exit 0
+fi
+
+CONSOLE_UID=&quot;$(/usr/bin/id -u &quot;$CONSOLE_USER&quot;)&quot;
+
+/bin/launchctl asuser &quot;$CONSOLE_UID&quot; \
+  /usr/bin/sudo -u &quot;$CONSOLE_USER&quot; \
+  /usr/bin/osascript - &quot;$WALLPAPER_PATH&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27;
+on run argv
+    set wallpaperPath to item 1 of argv
+    tell application &quot;System Events&quot;
+        tell every desktop
+            set picture to (POSIX file wallpaperPath)
+        end tell
+    end tell
+end run
+APPLESCRIPT
+
+echo &quot;Wallpaper applied for $CONSOLE_USER.&quot;</code></pre></div></section><section class="view" id="source2"><div class="code-card"><div class="code-head"><div><div class="code-title">Install White Light TTF Wallpaper</div><div class="code-file">Install_White_Light_TTF_Wallpaper.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source2">Copy source</button><button class="action" data-download-target="code-source2" data-filename="Install_White_Light_TTF_Wallpaper.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source2">#!/bin/zsh
+# Set the current logged-in user&#x27;s desktop wallpaper.
+# Store the image at the path below before running this script.
+
+set -euo pipefail
+
+WALLPAPER_PATH=&quot;/Users/Shared/Tow Foundation/TTF-Wallpaper-Light-full.PNG&quot;
+chmod 644 &quot;$WALLPAPER_PATH&quot;
+
+if [[ ! -f &quot;$WALLPAPER_PATH&quot; ]]; then
+  echo &quot;Wallpaper file not found: $WALLPAPER_PATH&quot;
+  exit 1
+fi
+
+CONSOLE_USER=&quot;$(/usr/bin/stat -f%Su /dev/console)&quot;
+if [[ -z &quot;$CONSOLE_USER&quot; || &quot;$CONSOLE_USER&quot; == &quot;root&quot; || &quot;$CONSOLE_USER&quot; == &quot;loginwindow&quot; ]]; then
+  echo &quot;No logged-in user. The wallpaper file is present, but there is no user session to update.&quot;
+  exit 0
+fi
+
+CONSOLE_UID=&quot;$(/usr/bin/id -u &quot;$CONSOLE_USER&quot;)&quot;
+
+/bin/launchctl asuser &quot;$CONSOLE_UID&quot; \
+  /usr/bin/sudo -u &quot;$CONSOLE_USER&quot; \
+  /usr/bin/osascript - &quot;$WALLPAPER_PATH&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27;
+on run argv
+    set wallpaperPath to item 1 of argv
+    tell application &quot;System Events&quot;
+        tell every desktop
+            set picture to (POSIX file wallpaperPath)
+        end tell
+    end tell
+end run
+APPLESCRIPT
+
+echo &quot;Wallpaper applied for $CONSOLE_USER.&quot;</code></pre></div></section><section class="view" id="source3"><div class="code-card"><div class="code-head"><div><div class="code-title">Install White Medium TTF Wallpaper</div><div class="code-file">Install_White_Medium_TTF_Wallpaper.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source3">Copy source</button><button class="action" data-download-target="code-source3" data-filename="Install_White_Medium_TTF_Wallpaper.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source3">#!/bin/zsh
+# Set the current logged-in user&#x27;s desktop wallpaper.
+# Store the image at the path below before running this script.
+
+set -euo pipefail
+
+WALLPAPER_PATH=&quot;/Users/Shared/Tow Foundation/TTF-Wallpaper-Medium-full.PNG&quot;
+chmod 644 &quot;$WALLPAPER_PATH&quot;
+
+if [[ ! -f &quot;$WALLPAPER_PATH&quot; ]]; then
+  echo &quot;Wallpaper file not found: $WALLPAPER_PATH&quot;
+  exit 1
+fi
+
+CONSOLE_USER=&quot;$(/usr/bin/stat -f%Su /dev/console)&quot;
+if [[ -z &quot;$CONSOLE_USER&quot; || &quot;$CONSOLE_USER&quot; == &quot;root&quot; || &quot;$CONSOLE_USER&quot; == &quot;loginwindow&quot; ]]; then
+  echo &quot;No logged-in user. The wallpaper file is present, but there is no user session to update.&quot;
+  exit 0
+fi
+
+CONSOLE_UID=&quot;$(/usr/bin/id -u &quot;$CONSOLE_USER&quot;)&quot;
+
+/bin/launchctl asuser &quot;$CONSOLE_UID&quot; \
+  /usr/bin/sudo -u &quot;$CONSOLE_USER&quot; \
+  /usr/bin/osascript - &quot;$WALLPAPER_PATH&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27;
+on run argv
+    set wallpaperPath to item 1 of argv
+    tell application &quot;System Events&quot;
+        tell every desktop
+            set picture to (POSIX file wallpaperPath)
+        end tell
+    end tell
+end run
+APPLESCRIPT
+
+echo &quot;Wallpaper applied for $CONSOLE_USER.&quot;</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

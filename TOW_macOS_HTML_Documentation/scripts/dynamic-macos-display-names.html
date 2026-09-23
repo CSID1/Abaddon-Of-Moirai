@@ -1,0 +1,59 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dynamic macOS Display Names | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Dynamic macOS Display Names</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Dynamically standardizes the Mac&#x27;s three primary system naming values - ComputerName, HostName, and LocalHostName - using the currently logged-in user&#x27;s account name, the Mac model name, and the hardware serial number.</p><p>The user-facing ComputerName is formatted for readability as &lt;USERNAME&gt; | &lt;MODEL NAME&gt; | &lt;SERIAL NUMBER&gt;, while HostName and LocalHostName use a sanitized hyphenated form suitable for hostname-style use.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Runs under #!/bin/zsh. Unlike several other Tow scripts that merely use a .zsh filename, this script actually executes with Zsh.</p><p>Before performing any device-naming work, recursively applies chmod -R 755 &quot;/Users/Shared/Tow Foundation&quot; and the ACL everyone allow read,execute,file_inherit,directory_inherit to the Tow shared-resource folder.</p><p>These first two permission commands duplicate the core behavior of the separate Resource Folder Access workflow. The naming logic itself does not read from /Users/Shared/Tow Foundation, so this permission repair is an independent side effect rather than a technical dependency of device naming.</p><p>Determines the current console user with stat -f &quot;%Su&quot; /dev/console and rejects an empty value, root, or _mbsetupuser by exiting with status 1.</p><p>Converts the entire logged-in username to uppercase with tr &#x27;[:lower:]&#x27; &#x27;[:upper:]&#x27; and stores the result in usernameUpper.</p><p>Queries system_profiler SPHardwareDataType for the first Model Name and Serial Number values and stores them as modelName and serialNumber.</p><p>If either the model name or serial number cannot be determined, the script logs an error and exits with status 1 before changing any of the three system names.</p><p>Builds the readable ComputerName value as ${usernameUpper} | ${modelName} | ${serialNumber}.</p><p>Builds the hostname-safe source value as ${usernameUpper}-${modelName}-${serialNumber}, replaces spaces with hyphens, and then removes every character other than A-Z, a-z, 0-9, and -.</p><p>Reads the Mac&#x27;s current ComputerName, HostName, and LocalHostName with scutil --get. Errors are suppressed with 2&gt;/dev/null || true, so an unset name is represented as an empty value rather than terminating the script.</p><p>Initializes the change-tracking flag with needsChange=false. This establishes the clean baseline used later to distinguish a device that already matches the required naming format from one that required one or more updates.</p><p>Compares the existing ComputerName to the readable prettyName. If they differ, it logs the old and new values, runs scutil --set ComputerName &quot;$prettyName&quot;, and assigns needsChange=true.</p><p>Compares the existing HostName to the sanitized safeName. If they differ, it updates the value with scutil --set HostName &quot;$safeName&quot; and sets needsChange=true.</p><p>Performs the same comparison for LocalHostName and writes safeName when remediation is required.</p><p>After evaluating all three names, the no-change branch checks [[ &quot;$needsChange&quot; == false ]]. If no value required remediation, the script prints Device names already match the required format. No changes needed. and exits with status 0 without flushing the cache.</p><p>When execution reaches the end, runs dscacheutil -flushcache to flush the local directory-service/name cache, prints Done., and exits with status 0.</p></div></details><details><summary>Device Name Format</summary><div class="section-body"><p>ComputerName — Human-readable format intended for local display and administrative identification: &lt;UPPERCASE USERNAME&gt; | &lt;MODEL NAME&gt; | &lt;SERIAL NUMBER&gt;.</p><p>Example structure only: JSMITH | MacBook Pro | C02XXXXXXXXX.</p><p>HostName / LocalHostName — Sanitized format derived from the same three values: &lt;UPPERCASE-USERNAME&gt;-&lt;MODEL-NAME&gt;-&lt;SERIAL-NUMBER&gt;. Spaces are converted to hyphens and non-alphanumeric/non-hyphen characters are removed.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>The script gives each managed Mac a predictable device identity that combines who is currently using the computer with immutable or hardware-derived identifying information.</p><p>Including the model and serial number makes the displayed name more useful to administrators than a generic hostname, while the username makes it immediately apparent which interactive user the naming workflow associated with the device at the time it ran.</p><p>Maintaining matching HostName and LocalHostName values also provides a consistent sanitized name for networking and hostname-oriented tooling, while ComputerName retains the more readable pipe-separated format.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><p>USER-ASSOCIATION NOTE  The names are derived from the user logged in at execution time. If a Mac is reassigned to a different person, the device names remain associated with the previous username until this script runs again while the new user is logged in.</p><p>CONSOLE-USER NOTE  The invalid-user check excludes root and _mbsetupuser, but it does not explicitly exclude loginwindow. If /dev/console reports loginwindow on a no-user session, the script can potentially construct a device name around LOGINWINDOW instead of stopping.</p><p>PERFORMANCE NOTE  The script invokes system_profiler SPHardwareDataType twice - once for the model and again for the serial number. The same hardware report could be captured once and parsed for both values, although the current approach is functionally valid.</p><p>ERROR-HANDLING NOTE  The script does not use set -e and does not check the exit status of each scutil --set operation. A failed individual name change can therefore be followed by cache flushing and a final exit 0.</p><p>RESOURCE-FOLDER SIDE EFFECT  Every execution recursively reapplies 755 permissions and the everyone read/execute inherited ACL to /Users/Shared/Tow Foundation before any user or hardware validation occurs. This means the shared-folder permission change happens even if the script later exits because no valid user, model, or serial number was found.</p><p>PRIVILEGE REQUIREMENT  Changing system names with scutil --set and recursively modifying the shared-resource folder require elevated privileges. The script appears designed for the normal privileged NinjaOne execution context.</p><p>The script changes only the Mac&#x27;s local ComputerName, HostName, LocalHostName. It does not directly rename cloud-side MDM, NinjaOne, Entra, or Google device records.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">ZSH_Dynamic_MacOS_Display_Names(1).zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="ZSH_Dynamic_MacOS_Display_Names(1).zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/zsh
+sudo chmod -R 755 &quot;/Users/Shared/Tow Foundation&quot;
+sudo chmod -R +a &quot;everyone allow read,execute,file_inherit,directory_inherit&quot; \
+&quot;/Users/Shared/Tow Foundation&quot;
+loggedInUser=$(stat -f &quot;%Su&quot; /dev/console)
+
+if [[ -z &quot;$loggedInUser&quot; || &quot;$loggedInUser&quot; == &quot;root&quot; || &quot;$loggedInUser&quot; == &quot;_mbsetupuser&quot; ]]; then
+    echo &quot;No valid logged-in user found. Exiting.&quot;
+    exit 1
+fi
+
+usernameUpper=$(echo &quot;$loggedInUser&quot; | tr &#x27;[:lower:]&#x27; &#x27;[:upper:]&#x27;)
+
+modelName=$(system_profiler SPHardwareDataType | awk -F&#x27;: &#x27; &#x27;/Model Name/ {print $2; exit}&#x27;)
+serialNumber=$(system_profiler SPHardwareDataType | awk -F&#x27;: &#x27; &#x27;/Serial Number/ {print $2; exit}&#x27;)
+
+if [[ -z &quot;$modelName&quot; || -z &quot;$serialNumber&quot; ]]; then
+    echo &quot;Could not determine model or serial number. Exiting.&quot;
+    exit 1
+fi
+
+prettyName=&quot;${usernameUpper} | ${modelName} | ${serialNumber}&quot;
+
+safeName=&quot;${usernameUpper}-${modelName}-${serialNumber}&quot;
+safeName=$(echo &quot;$safeName&quot; | sed &#x27;s/ /-/g&#x27; | sed &#x27;s/[^A-Za-z0-9-]//g&#x27;)
+
+currentComputerName=$(scutil --get ComputerName 2&gt;/dev/null || true)
+currentHostName=$(scutil --get HostName 2&gt;/dev/null || true)
+currentLocalHostName=$(scutil --get LocalHostName 2&gt;/dev/null || true)
+
+needsChange=false
+
+if [[ &quot;$currentComputerName&quot; != &quot;$prettyName&quot; ]]; then
+    echo &quot;Updating ComputerName: $currentComputerName -&gt; $prettyName&quot;
+    scutil --set ComputerName &quot;$prettyName&quot;
+    needsChange=true
+fi
+
+if [[ &quot;$currentHostName&quot; != &quot;$safeName&quot; ]]; then
+    echo &quot;Updating HostName: $currentHostName -&gt; $safeName&quot;
+    scutil --set HostName &quot;$safeName&quot;
+    needsChange=true
+fi
+
+if [[ &quot;$currentLocalHostName&quot; != &quot;$safeName&quot; ]]; then
+    echo &quot;Updating LocalHostName: $currentLocalHostName -&gt; $safeName&quot;
+    scutil --set LocalHostName &quot;$safeName&quot;
+    needsChange=true
+fi
+
+if [[ &quot;$needsChange&quot; == false ]]; then
+    echo &quot;Device names already match the required format. No changes needed.&quot;
+    exit 0
+fi
+
+dscacheutil -flushcache
+
+echo &quot;Done.&quot;
+exit 0</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

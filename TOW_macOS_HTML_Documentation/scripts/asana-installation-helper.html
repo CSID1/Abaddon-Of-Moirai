@@ -1,0 +1,74 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Asana Installation Helper V2 | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Asana Installation Helper V2</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Prepares and normalizes the Asana desktop application after deployment by relocating it from /Applications/Asana.app to the organization&#x27;s shared user-writable application location at /Users/Shared/Applications/Asana.app.</p><p>The script is designed to let the currently signed-in standard user own and update the deployed Asana application while keeping its final path static and predictable for other managed configuration, including the managed Dock layout.</p><p>This script is used as one half of the current Asana deployment workflow. The related cleanup script is Scrub_Asana_V1.zsh, which removes the previous installation and per-user Asana data before a fresh deployment when that cleanup step is invoked.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Determines the active console user with stat -f &quot;%Su&quot; /dev/console and stores the result in loggedInUser.</p><p>Stops immediately with exit code 1 if no usable interactive user is present, including when the console owner is empty, root, or loginwindow. This prevents the script from assigning the application to a non-user account.</p><p>Defines the temporary installer location as /Applications/Asana.app and the final shared location as /Users/Shared/Applications/Asana.app.</p><p>Terminates a running Asana process with pkill -x &quot;Asana&quot;. Errors are intentionally ignored through 2&gt;/dev/null || true so the script continues when Asana is not running.</p><p>Creates /Users/Shared/Applications if necessary, changes that folder&#x27;s owner to the logged-in user and group staff, and grants the owner read, write, and execute access with chmod u+rwx.</p><p>Checks whether /Applications/Asana.app is an old symbolic link. If it is, the script removes that link before continuing. It does not create a replacement symlink afterward.</p><p>If a newly deployed Asana application exists as a directory at /Applications/Asana.app, the script deletes any existing copy at /Users/Shared/Applications/Asana.app and moves the fresh application bundle into the shared location.</p><p>If no new copy exists in /Applications but Asana already exists at the shared destination, the script can continue using that existing shared copy. If neither location produces a valid shared application directory, it exits with code 1.</p><p>Recursively changes ownership of the entire Asana bundle to $loggedInUser:staff and applies chmod -R u+rwX. This guarantees owner read/write access and applies execute permission to directories and files that already have an execute bit.</p><p>Verifies ownership by running find &quot;$sharedApp&quot; \( ! -user &quot;$loggedInUser&quot; -o ! -group staff \) -print. If any item is not owned by the logged-in user or group staff, the script prints the unexpected paths and exits with code 1.</p><p>On success, prints the final installation path, displays the application directory ownership with ls -ld, confirms the expected ownership state, and exits with code 0.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>Asana requires a user-writable installation model in this environment so its own update behavior does not repeatedly request administrator credentials from standard users.</p><p>Using /Users/Shared/Applications/Asana.app provides a fixed path that is independent of an individual user&#x27;s home-directory name. That is important because the managed Dock configuration references a static application path and cannot dynamically substitute each user&#x27;s home directory.</p><p>The ownership and permission changes then make the currently logged-in user the owner of the Asana bundle so application-level update operations can modify the files without relying on local administrator elevation.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout warning">OPERATIONAL NOTE  This script expects an interactive macOS user to be signed in. Running it during a true pre-login state causes the user validation check to fail intentionally.</div><div class="callout warning">OPERATIONAL NOTE  The managed Dock entry for Asana should point to /Users/Shared/Applications/Asana.app. Returning Asana to /Applications/Asana.app without also updating the Dock payload can leave the managed Dock item unresolved.</div><div class="callout danger">IMPORTANT CAVEAT  The script recursively transfers ownership of the complete Asana application bundle to the logged-in user. This is intentional for the current update workflow, but it means the application is no longer owned by root or another administrative deployment account after the script completes.</div><div class="callout danger">IMPORTANT CAVEAT  The script verifies owner and group values, but it does not validate the Asana version, application code signature, bundle integrity, or whether the resulting permissions are identical across every file beyond the requested owner permissions.</div><div class="callout info">RELATED SCRIPT  When the deployment workflow requires a clean replacement, Scrub_Asana_V1.zsh is used as the companion cleanup step before the application is installed and this helper relocates and re-permissions the new bundle.</div><div class="callout info">INTERPRETER NOTE  Although the filename ends in .zsh, the script declares #!/bin/bash as its interpreter. When executed directly, the shebang selects Bash, not Z shell.</div><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Asana_Installation_Helper_V2.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Asana_Installation_Helper_V2.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+loggedInUser=$(stat -f &quot;%Su&quot; /dev/console)
+
+if [[ -z &quot;$loggedInUser&quot; || &quot;$loggedInUser&quot; == &quot;root&quot; || &quot;$loggedInUser&quot; == &quot;loginwindow&quot; ]]; then
+    echo &quot;No valid logged-in user found.&quot;
+    exit 1
+fi
+
+systemApp=&quot;/Applications/Asana.app&quot;
+sharedApps=&quot;/Users/Shared/Applications&quot;
+sharedApp=&quot;$sharedApps/Asana.app&quot;
+
+echo &quot;Logged-in user: $loggedInUser&quot;
+echo &quot;Asana destination: $sharedApp&quot;
+
+# Quit Asana if running
+pkill -x &quot;Asana&quot; 2&gt;/dev/null || true
+
+# Create shared Applications folder
+mkdir -p &quot;$sharedApps&quot;
+
+# Make the logged-in user owner of the shared Applications folder
+chown &quot;$loggedInUser&quot;:staff &quot;$sharedApps&quot;
+chmod u+rwx &quot;$sharedApps&quot;
+
+# Clean up an old /Applications symlink if one exists
+if [[ -L &quot;$systemApp&quot; ]]; then
+    echo &quot;Removing old Asana symlink...&quot;
+    rm &quot;$systemApp&quot;
+fi
+
+# If a freshly installed Asana exists in /Applications,
+# replace the existing shared copy with it
+if [[ -d &quot;$systemApp&quot; ]]; then
+    echo &quot;Moving Asana from /Applications to $sharedApp...&quot;
+
+    rm -rf &quot;$sharedApp&quot;
+    mv &quot;$systemApp&quot; &quot;$sharedApp&quot;
+fi
+
+# Verify Asana exists at the desired location
+if [[ ! -d &quot;$sharedApp&quot; ]]; then
+    echo &quot;ERROR: Asana.app not found at $sharedApp&quot;
+    exit 1
+fi
+
+# Give the logged-in user ownership of the entire application
+echo &quot;Updating ownership and permissions...&quot;
+
+chown -R &quot;$loggedInUser&quot;:staff &quot;$sharedApp&quot;
+chmod -R u+rwX &quot;$sharedApp&quot;
+
+# Verify ownership
+remaining=$(find &quot;$sharedApp&quot; \( ! -user &quot;$loggedInUser&quot; -o ! -group staff \) -print)
+
+if [[ -n &quot;$remaining&quot; ]]; then
+    echo &quot;WARNING: Some files still have unexpected ownership:&quot;
+    echo &quot;$remaining&quot;
+    exit 1
+fi
+
+echo &quot;&quot;
+echo &quot;Asana successfully installed at:&quot;
+echo &quot;$sharedApp&quot;
+
+echo &quot;&quot;
+echo &quot;Application ownership:&quot;
+ls -ld &quot;$sharedApp&quot;
+
+echo &quot;&quot;
+echo &quot;All Asana files are owned by $loggedInUser:staff.&quot;
+
+exit 0</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

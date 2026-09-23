@@ -1,0 +1,78 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>macOS Enrollment Status Field | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>macOS Enrollment Status Field</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Evaluates whether a managed macOS device has completed the core enrollment workflow and writes the result into the NinjaOne custom field macosEnrollmentStatus. The field is set to either Enrollment Complete or Enrollment Incomplete.</p><p>Enrollment is considered complete only when all three required states are simultaneously confirmed: Setup Assistant has completed, the Mac is actively enrolled in MDM with NinjaOne configuration evidence present, and Platform SSO is registered and active for the currently logged-in user.</p><p>This script acts as the status bridge between local Mac enrollment state and the broader NinjaOne policy workflow. It does not itself deploy post-enrollment applications or configuration; it only determines and publishes the readiness state used by that workflow.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Defines the NinjaOne command-line utility path as /Applications/NinjaRMMAgent/programdata/ninjarmm-cli and targets the custom field key macosEnrollmentStatus.</p><p>Initializes three independent readiness flags - SETUP_COMPLETE, NINJA_MDM_READY, and PSSO_READY - to false. Each flag must later become true before the device can be marked complete.</p><p>Checks for /var/db/.AppleSetupDone. Presence of this file sets SETUP_COMPLETE=true, confirming that the normal macOS Setup Assistant completion marker exists.</p><p>Collects current MDM enrollment status with /usr/bin/profiles status -type enrollment and installed configuration-profile data with /usr/bin/profiles show -type configuration. Standard error is merged into the captured output for both commands.</p><p>Sets NINJA_MDM_READY=true only when the enrollment output contains MDM enrollment: Yes and the configuration-profile output contains at least one case-insensitive reference to NinjaOne, NinjaRMM, or ninjarmm.</p><p>Determines the current console user through /usr/bin/stat -f %Su /dev/console. An empty result, root, or loginwindow is treated as having no eligible signed-in user, leaving PSSO_READY=false.</p><p>For a valid console user, resolves the user UID with /usr/bin/id -u and executes /usr/bin/app-sso platform -s inside that user&#x27;s GUI context using launchctl asuser and sudo -H -u.</p><p>Parses the Platform SSO status output and sets PSSO_READY=true only when all three conditions are present: &quot;registrationCompleted&quot;: true, &quot;state&quot;: &quot;POUserStateNormal&quot;, and a supported login type of either POLoginTypePassword or POLoginTypeUserSecureEnclaveKey.</p><p>If SETUP_COMPLETE, NINJA_MDM_READY, and PSSO_READY are all true, assigns Enrollment Complete. Any other combination assigns Enrollment Incomplete.</p><p>Before writing the custom field, verifies that ninjarmm-cli exists and is executable. If it is unavailable, the script prints ERROR: NinjaOne CLI was not found. and exits with status 1.</p><p>Writes the selected value with ninjarmm-cli set macosEnrollmentStatus &lt;value&gt; and then prints the resulting custom-field value plus the three individual readiness flags for logging and troubleshooting.</p><p>Finishes with exit 0 after the write command and diagnostic output complete.</p></div></details><details><summary>Current Workflow Integration</summary><div class="section-body"><p>In the current Tow Foundation policy design, this script is associated with the scheduled automation 006 // MacOS Enrollment Status Field [Every 3min]. The scheduling is configured in NinjaOne; the script itself contains no timer or recurrence logic.</p><p>The resulting custom field is evaluated by the condition Enrollment Complete Automations, which checks whether MacOS Enrollment Status contains Enrollment Complete. When that condition becomes true, the post-enrollment automation set is allowed to run; when the field no longer meets the condition, the condition is configured to reset.</p><p>This makes the custom field a simple shared state indicator: local macOS readiness is evaluated on-device, while workflow execution remains controlled by the NinjaOne policy and condition layers.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>The script prevents post-enrollment activity from being triggered merely because the Mac has appeared in MDM. It requires evidence that the user-facing setup process has finished and that the active user has a healthy Platform SSO registration before reporting the device as ready.</p><p>Supporting both POLoginTypePassword and POLoginTypeUserSecureEnclaveKey allows the same readiness check to work with either of the two Entra Platform SSO authentication modes used in this environment.</p><p>Publishing the result to a NinjaOne custom field also makes enrollment state visible to policy logic and technicians without requiring them to manually inspect Setup Assistant, MDM, and PSSO state on each Mac.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout warning">OPERATIONAL NOTE  The script itself does not run every three minutes. That cadence belongs to the surrounding NinjaOne scheduled automation. Running this script manually performs only one immediate evaluation and field update.</div><div class="callout danger">IMPORTANT CAVEAT  A valid interactive console user is required for PSSO_READY to become true. A Mac can therefore have completed Setup Assistant and be correctly enrolled in MDM yet still report Enrollment Incomplete while no eligible user is signed in.</div><div class="callout danger">IMPORTANT CAVEAT  The MDM check proves two separate facts - active MDM enrollment and the presence of configuration-profile text matching NinjaOne|NinjaRMM|ninjarmm. It does not cryptographically prove that the active MDM enrollment server itself is NinjaOne. Stale or unrelated matching profile data could theoretically satisfy the second half of the check.</div><div class="callout warning">OPERATIONAL WARNING  The PSSO check depends on the current text/JSON-like output produced by app-sso platform -s. If Apple changes field names or output formatting for registrationCompleted, loginType, or state, the regular-expression checks may stop matching and the device will remain Enrollment Incomplete until the script is updated.</div><div class="callout warning">OPERATIONAL NOTE  The script intentionally accepts either Password-mode or Secure-Enclave-mode Platform SSO as complete, but requires the user state to be exactly POUserStateNormal. Other PSSO states are treated as incomplete rather than inferred to be healthy.</div><div class="callout danger">IMPORTANT CAVEAT  The script verifies that ninjarmm-cli exists before attempting the custom-field write, but it does not check the exit status of the subsequent ninjarmm-cli set command. Because the script later ends with exit 0, a failed field write can still result in the overall script reporting success to the automation runner.</div><p>Failures from the profiles or app-sso status commands do not directly terminate the script. Their captured output simply fails the expected pattern checks, causing the applicable readiness flag to remain false and the published state to become Enrollment Incomplete.</p><p>The script is designed for execution from the NinjaOne management context where the NinjaOne agent and CLI are already present. It does not install the agent, create the custom field, create the surrounding condition, or define the scheduled automation that invokes it.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">MacOS_Enrollment_Status_Field.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="MacOS_Enrollment_Status_Field.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+CLI=&quot;/Applications/NinjaRMMAgent/programdata/ninjarmm-cli&quot;
+FIELD=&quot;macosEnrollmentStatus&quot;
+
+COMPLETE_VALUE=&quot;Enrollment Complete&quot;
+INCOMPLETE_VALUE=&quot;Enrollment Incomplete&quot;
+
+SETUP_COMPLETE=false
+NINJA_MDM_READY=false
+PSSO_READY=false
+
+# 1. Setup Assistant completed
+if [[ -f &quot;/var/db/.AppleSetupDone&quot; ]]; then
+    SETUP_COMPLETE=true
+fi
+
+# 2. Actively enrolled in MDM, with NinjaOne identifiable in the profiles
+MDM_STATUS=$(/usr/bin/profiles status -type enrollment 2&gt;&amp;1)
+PROFILE_DATA=$(/usr/bin/profiles show -type configuration 2&gt;&amp;1)
+
+if printf &#x27;%s\n&#x27; &quot;$MDM_STATUS&quot; |
+    /usr/bin/grep -Eiq &#x27;MDM enrollment:[[:space:]]*Yes&#x27; &amp;&amp;
+   printf &#x27;%s\n&#x27; &quot;$PROFILE_DATA&quot; |
+    /usr/bin/grep -Eiq &#x27;NinjaOne|NinjaRMM|ninjarmm&#x27;; then
+
+    NINJA_MDM_READY=true
+fi
+
+# 3. PSSO registered and active for the currently logged-in user
+CONSOLE_USER=$(/usr/bin/stat -f &#x27;%Su&#x27; /dev/console)
+
+if [[ -n &quot;$CONSOLE_USER&quot; &amp;&amp;
+      &quot;$CONSOLE_USER&quot; != &quot;root&quot; &amp;&amp;
+      &quot;$CONSOLE_USER&quot; != &quot;loginwindow&quot; ]]; then
+
+    CONSOLE_UID=$(/usr/bin/id -u &quot;$CONSOLE_USER&quot;)
+
+    PSSO_STATUS=$(
+        /bin/launchctl asuser &quot;$CONSOLE_UID&quot; \
+            /usr/bin/sudo -H -u &quot;$CONSOLE_USER&quot; \
+            /usr/bin/app-sso platform -s 2&gt;&amp;1
+    )
+
+    if printf &#x27;%s\n&#x27; &quot;$PSSO_STATUS&quot; |
+            /usr/bin/grep -Eq &#x27;&quot;registrationCompleted&quot;[[:space:]]*:[[:space:]]*true&#x27; &amp;&amp;
+       printf &#x27;%s\n&#x27; &quot;$PSSO_STATUS&quot; |
+            /usr/bin/grep -Eq &#x27;&quot;loginType&quot;[[:space:]]*:[[:space:]]*&quot;POLoginType(Password|UserSecureEnclaveKey)&#x27; &amp;&amp;
+       printf &#x27;%s\n&#x27; &quot;$PSSO_STATUS&quot; |
+            /usr/bin/grep -Eq &#x27;&quot;state&quot;[[:space:]]*:[[:space:]]*&quot;POUserStateNormal&#x27;; then
+
+        PSSO_READY=true
+    fi
+fi
+
+# Set the NinjaOne custom field
+if [[ &quot;$SETUP_COMPLETE&quot; == true &amp;&amp;
+      &quot;$NINJA_MDM_READY&quot; == true &amp;&amp;
+      &quot;$PSSO_READY&quot; == true ]]; then
+
+    VALUE=&quot;$COMPLETE_VALUE&quot;
+else
+    VALUE=&quot;$INCOMPLETE_VALUE&quot;
+fi
+
+if [[ ! -x &quot;$CLI&quot; ]]; then
+    echo &quot;ERROR: NinjaOne CLI was not found.&quot;
+    exit 1
+fi
+
+&quot;$CLI&quot; set &quot;$FIELD&quot; &quot;$VALUE&quot;
+
+echo &quot;macosEnrollmentStatus: $VALUE&quot;
+echo &quot;Setup Assistant complete: $SETUP_COMPLETE&quot;
+echo &quot;NinjaOne MDM ready: $NINJA_MDM_READY&quot;
+echo &quot;PSSO ready: $PSSO_READY&quot;
+
+exit 0</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

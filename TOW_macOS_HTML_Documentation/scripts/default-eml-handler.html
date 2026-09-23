@@ -1,0 +1,194 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Prompt User to Set Default Mail App for .eml Files | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Prompt User to Set Default Mail App for .eml Files</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Sets Microsoft Outlook as the default application used to open .eml email-message files for the currently signed-in macOS user.</p><p>The script is intended for execution by NinjaOne as root on macOS 12 or later. Rather than directly editing Launch Services preference files, it uses AppKit/NSWorkspace in the user&#x27;s graphical session to request the file-association change and then independently verifies the resulting handler.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Defines /Applications/Microsoft Outlook.app as the target application and com.microsoft.Outlook as the expected bundle identifier.</p><p>Determines the current console user with stat -f &quot;%Su&quot; /dev/console. An empty value, root, or loginwindow is treated as no valid signed-in user and causes the script to exit with status 1.</p><p>Resolves the signed-in user&#x27;s UID with id -u and confirms that /Applications/Microsoft Outlook.app exists before attempting any association change.</p><p>Creates a private temporary working directory under /private/tmp/default-eml.XXXXXX with mktemp -d. A shell EXIT trap removes the entire temporary directory when the script finishes.</p><p>Creates a fictitious but valid sample email file named sample.eml. The message uses only example.invalid addresses and contains no real user or organizational email data.</p><p>Creates an AppleScriptObjC query helper that uses NSWorkspace&#x27;s URLForApplicationToOpenURL method to determine which application currently handles the sample .eml file.</p><p>Changes ownership of the temporary working directory to the signed-in user and applies u+rwX,go+rX permissions so the query/helper files can be accessed from the user&#x27;s graphical session.</p><p>Executes the query through launchctl asuser and sudo -H -u so Launch Services is queried in the active user&#x27;s context rather than only in the root management context.</p><p>If the current handler already resolves to com.microsoft.Outlook, the script logs that Outlook is already the default for .eml files and exits successfully without building the setter helper.</p><p>If Outlook is not already the handler, generates a second AppleScriptObjC source file that requests NSWorkspace to make Outlook the default application for the content type represented by the sample .eml file.</p><p>The setter helper calls setDefaultApplicationAtURL:toOpenContentTypeOfFileAtURL:completionHandler: using the Outlook application URL and the temporary sample-email URL.</p><p>Keeps the Cocoa run loop alive for 15 seconds after submitting the request so Launch Services has time to process the asynchronous default-application change.</p><p>Compiles the setter source into a temporary application bundle named Default EML Setup.app with osacompile. Compilation failure or a missing resulting app bundle causes an immediate exit with status 1.</p><p>Changes ownership of the temporary applet to the signed-in user and launches it in that user&#x27;s session with open -W -n. The -W option waits for the helper to finish and -n requests a new instance.</p><p>Queries the current .eml handler again after the setter helper exits. The script does not assume the request succeeded merely because the helper launched.</p><p>Returns success only when the verified post-change handler is com.microsoft.Outlook. If the association remains unchanged, the script logs that no direct Launch Services preference files were modified and exits with status 2.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>The script standardizes the application used when users double-click or otherwise open saved .eml message files, ensuring those files open in Microsoft Outlook rather than another registered mail application.</p><p>Using the supported NSWorkspace API avoids directly manipulating Launch Services databases or preference files, while the before/after handler checks provide an explicit verification step for the deployment workflow.</p><p>Running the API request in the signed-in user&#x27;s GUI session is important because default file handlers are user-specific behavior. A root-only Launch Services change would not reliably represent the interactive user&#x27;s preference context.</p></div></details><details><summary>Relationship To Default Mail Application Settings</summary><div class="section-body"><p>IMPORTANT DISTINCTION  This script changes only the handler for .eml files. It does not set the system&#x27;s mailto: URL handler and does not by itself make Outlook the default application used when another application opens a new-email link.</p><p>The Tow deployment workflow therefore treats the .eml file association separately from the mailto: handler. In the observed macOS workflow, changing a default file-opening association can trigger a small system-generated confirmation window asking the user to choose the requested application or keep the existing default, while the corresponding URL-handler changes do not present the same confirmation. A separate automation/script can manage the default mail-link handler when that behavior is also required.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout warning">OPERATIONAL WARNING  Outlook must already exist at the exact path /Applications/Microsoft Outlook.app. The script does not install Outlook or search alternate application locations.</div><p>USER CONFIRMATION BEHAVIOR  The script does not build its own confirmation dialog, but macOS does present a small system-generated confirmation window when this file-handler change is requested. For this workflow, the user is effectively asked whether to use Microsoft Outlook for the file type or keep the existing application such as Mail. The association is therefore not fully silent even though the prompt itself comes from macOS rather than from custom script UI.</p><div class="callout warning">OPERATIONAL NOTE  The temporary setter application uses NSApplicationActivationPolicyRegular and activates itself in the signed-in user&#x27;s session. This allows the macOS file-association request and its system confirmation UI to occur in the interactive desktop where the user can respond.</div><div class="callout danger">IMPORTANT CAVEAT  The script waits a fixed 15 seconds for the asynchronous Launch Services request. If the operating system takes longer than that to commit the association, the immediate verification can still report the old handler and return exit 2 even if the system finishes processing shortly afterward.</div><div class="callout danger">IMPORTANT CAVEAT  The script determines the applicable content type indirectly by creating a real .eml file and asking NSWorkspace which application opens it. If Launch Services cannot determine an application for the sample file, the query returns NONE and the later setter/verification logic may not behave as expected.</div><p>All temporary files, including the fictitious message, AppleScript sources, and compiled helper app, are stored under /private/tmp and removed by the EXIT trap when the script ends normally or through a handled shell exit path.</p><p>The sample message intentionally uses the reserved .invalid domain and contains no real sender, recipient, or user information.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Prompts_User_to_Set_Default_Mail_App-eml_Files.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Prompts_User_to_Set_Default_Mail_App-eml_Files.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+# Sets Microsoft Outlook as the default application for .eml files for the
+# currently signed-in macOS user. This is equivalent to choosing Outlook under
+# Finder &gt; Get Info &gt; Open with and then selecting Change All.
+#
+# Intended for execution by NinjaOne as root on macOS 12 or later.
+
+PATH=&quot;/usr/bin:/bin:/usr/sbin:/sbin&quot;
+
+TARGET_APP=&quot;/Applications/Microsoft Outlook.app&quot;
+TARGET_BUNDLE_ID=&quot;com.microsoft.Outlook&quot;
+
+log() {
+    echo &quot;[DefaultEML] $*&quot;
+}
+
+console_user=$(/usr/bin/stat -f &quot;%Su&quot; /dev/console)
+
+if [[ -z &quot;$console_user&quot; || &quot;$console_user&quot; == &quot;root&quot; || &quot;$console_user&quot; == &quot;loginwindow&quot; ]]; then
+    log &quot;No signed-in user was detected.&quot;
+    exit 1
+fi
+
+console_uid=$(/usr/bin/id -u &quot;$console_user&quot;)
+
+if [[ ! -d &quot;$TARGET_APP&quot; ]]; then
+    log &quot;Outlook was not found at: $TARGET_APP&quot;
+    exit 1
+fi
+
+run_as_console_user() {
+    /bin/launchctl asuser &quot;$console_uid&quot; \
+        /usr/bin/sudo -H -u &quot;$console_user&quot; &quot;$@&quot;
+}
+
+temporary_directory=$(/usr/bin/mktemp -d &quot;/private/tmp/default-eml.XXXXXX&quot;)
+
+if [[ -z &quot;$temporary_directory&quot; || ! -d &quot;$temporary_directory&quot; ]]; then
+    log &quot;Unable to create the temporary working directory.&quot;
+    exit 1
+fi
+
+sample_eml=&quot;$temporary_directory/sample.eml&quot;
+query_source=&quot;$temporary_directory/query-handler.applescript&quot;
+applet_source=&quot;$temporary_directory/main.applescript&quot;
+applet_path=&quot;$temporary_directory/Default EML Setup.app&quot;
+
+cleanup() {
+    if [[ -n &quot;$temporary_directory&quot; &amp;&amp; -d &quot;$temporary_directory&quot; ]]; then
+        /bin/rm -rf &quot;$temporary_directory&quot;
+    fi
+}
+
+trap cleanup EXIT
+
+# A valid but entirely fictitious email message gives macOS a real .eml file
+# from which to determine the applicable content type.
+/bin/cat &gt; &quot;$sample_eml&quot; &lt;&lt;&#x27;EML&#x27;
+From: sender@example.invalid
+To: recipient@example.invalid
+Subject: Default application test
+Date: Thu, 1 Jan 1970 00:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+This temporary message is used only to identify the macOS content type for
+.eml files. It contains no real email address or user information.
+EML
+
+/bin/cat &gt; &quot;$query_source&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27;
+use framework &quot;AppKit&quot;
+use framework &quot;Foundation&quot;
+
+on run arguments
+    set samplePath to item 1 of arguments
+    set sampleURL to current application&#x27;s NSURL&#x27;s fileURLWithPath:samplePath
+    set workspace to current application&#x27;s NSWorkspace&#x27;s sharedWorkspace()
+    set applicationURL to workspace&#x27;s URLForApplicationToOpenURL:sampleURL
+
+    if applicationURL is missing value then
+        return &quot;NONE&quot;
+    end if
+
+    set applicationBundle to current application&#x27;s NSBundle&#x27;s bundleWithURL:applicationURL
+
+    if applicationBundle is missing value then
+        return applicationURL&#x27;s |path|() as text
+    end if
+
+    set bundleIdentifier to applicationBundle&#x27;s bundleIdentifier()
+
+    if bundleIdentifier is missing value then
+        return applicationURL&#x27;s |path|() as text
+    end if
+
+    return bundleIdentifier as text
+end run
+APPLESCRIPT
+
+/usr/sbin/chown -R &quot;$console_uid&quot; &quot;$temporary_directory&quot;
+/bin/chmod -R u+rwX,go+rX &quot;$temporary_directory&quot;
+
+get_eml_handler() {
+    run_as_console_user /usr/bin/osascript &quot;$query_source&quot; &quot;$sample_eml&quot;
+}
+
+current_handler=$(get_eml_handler)
+query_status=$?
+
+log &quot;Signed-in user: $console_user&quot;
+
+if [[ &quot;$query_status&quot; -ne 0 ]]; then
+    log &quot;Unable to determine the current .eml handler.&quot;
+    exit 1
+fi
+
+log &quot;Current .eml handler: $current_handler&quot;
+
+if [[ &quot;$current_handler&quot; == &quot;$TARGET_BUNDLE_ID&quot; ]]; then
+    log &quot;Outlook is already the default application for .eml files.&quot;
+    exit 0
+fi
+
+/bin/cat &gt; &quot;$applet_source&quot; &lt;&lt;APPLESCRIPT
+use framework &quot;AppKit&quot;
+use framework &quot;Foundation&quot;
+use scripting additions
+
+on run
+    set applicationObject to current application&#x27;s NSApplication&#x27;s sharedApplication()
+
+    applicationObject&#x27;s setActivationPolicy:(current application&#x27;s NSApplicationActivationPolicyRegular)
+    applicationObject&#x27;s activateIgnoringOtherApps:true
+
+    set workspace to current application&#x27;s NSWorkspace&#x27;s sharedWorkspace()
+    set outlookURL to current application&#x27;s NSURL&#x27;s fileURLWithPath:&quot;$TARGET_APP&quot;
+    set emailFileURL to current application&#x27;s NSURL&#x27;s fileURLWithPath:&quot;$sample_eml&quot;
+
+    workspace&#x27;s setDefaultApplicationAtURL:outlookURL ¬
+        toOpenContentTypeOfFileAtURL:emailFileURL ¬
+        completionHandler:(missing value)
+
+    -- Keep the Cocoa event loop alive while Launch Services processes the
+    -- asynchronous default-application request.
+    set expirationDate to current application&#x27;s NSDate&#x27;s dateWithTimeIntervalSinceNow:15
+    current application&#x27;s NSRunLoop&#x27;s currentRunLoop()&#x27;s runUntilDate:expirationDate
+end run
+APPLESCRIPT
+
+log &quot;Building temporary NSWorkspace helper.&quot;
+
+compile_output=$(/usr/bin/osacompile -o &quot;$applet_path&quot; &quot;$applet_source&quot; 2&gt;&amp;1)
+compile_status=$?
+
+if [[ &quot;$compile_status&quot; -ne 0 || ! -d &quot;$applet_path&quot; ]]; then
+    log &quot;Unable to build the temporary helper.&quot;
+    if [[ -n &quot;$compile_output&quot; ]]; then
+        log &quot;$compile_output&quot;
+    fi
+    exit 1
+fi
+
+/usr/sbin/chown -R &quot;$console_uid&quot; &quot;$applet_path&quot;
+/bin/chmod -R u+rwX,go+rX &quot;$applet_path&quot;
+
+log &quot;Requesting Outlook as the default application for .eml files.&quot;
+
+run_as_console_user /usr/bin/open -W -n &quot;$applet_path&quot;
+launch_status=$?
+
+if [[ &quot;$launch_status&quot; -ne 0 ]]; then
+    log &quot;The temporary helper returned exit code $launch_status.&quot;
+fi
+
+current_handler=$(get_eml_handler)
+query_status=$?
+
+if [[ &quot;$query_status&quot; -ne 0 ]]; then
+    log &quot;Unable to verify the .eml handler after the request.&quot;
+    exit 1
+fi
+
+log &quot;.eml handler after the request: $current_handler&quot;
+
+if [[ &quot;$current_handler&quot; == &quot;$TARGET_BUNDLE_ID&quot; ]]; then
+    log &quot;Success: Outlook is now the default application for .eml files.&quot;
+    exit 0
+fi
+
+log &quot;The request completed without changing the .eml handler.&quot;
+log &quot;No Launch Services preference files were modified directly.&quot;
+exit 2
+</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

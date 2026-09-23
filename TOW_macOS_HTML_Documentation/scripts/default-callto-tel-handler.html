@@ -1,0 +1,205 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Set Default callto:/tel: Handlers to Zoom | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Set Default callto:/tel: Handlers to Zoom</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Sets Zoom as the signed-in user&#x27;s default application for telephone URL links using the tel: and callto: schemes on macOS.</p><p>Unlike the separate .eml and .pdf file-association workflows, this link-handler change does not present the user with a native confirmation prompt in the current environment. The script requests the change directly through NSWorkspace and verifies the resulting handlers afterward.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Runs under #!/bin/bash and is intended for root execution through NinjaOne on macOS 15 or later.</p><p>Defines /Applications/zoom.us.app as the target application and reads Contents/Info.plist to determine Zoom&#x27;s actual CFBundleIdentifier.</p><p>Determines the active console user with stat -f &quot;%Su&quot; /dev/console. An empty value, root, or loginwindow causes the script to exit with status 1.</p><p>Resolves the signed-in user&#x27;s UID with id -u and confirms the Zoom application and its Info.plist are present before continuing.</p><p>Reads Zoom&#x27;s CFBundleURLTypes from its Info.plist and verifies that the installed build explicitly advertises both required schemes: tel and callto. If either scheme is missing, the script exits rather than attempting to register an unsupported handler.</p><p>Defines run_as_console_user() using launchctl asuser and sudo -H -u so Launch Services queries and changes occur inside the signed-in user&#x27;s graphical session.</p><p>Creates a temporary working directory under /private/tmp/set-zoom-default.XXXXXX, assigns it to the signed-in user, and registers a cleanup trap for EXIT, HUP, INT, and TERM.</p><p>Builds an AppleScriptObjC query helper that creates test URLs using tel:+15555550100 and callto:+15555550100, then asks NSWorkspace which application Launch Services would currently use to open each scheme.</p><p>Records and logs the current tel: and callto: handlers. If both already resolve to Zoom&#x27;s discovered bundle identifier, the script exits successfully without rebuilding the handler configuration.</p><p>If either handler is not Zoom, generates a temporary AppleScriptObjC helper that calls setDefaultApplicationAtURL:toOpenURLsWithScheme:completionHandler: once for tel and once for callto.</p><p>Keeps the helper&#x27;s run loop alive for 30 seconds after submitting both requests so Launch Services has time to process the asynchronous handler changes.</p><p>Compiles the helper into Set Zoom as Default Calling App.app using osacompile. It then sets LSUIElement = true in the helper&#x27;s Info.plist so the temporary helper runs as a background UI element without showing a Dock icon.</p><p>Changes ownership of the helper to the signed-in user, applies user read/write/execute permissions, and ad-hoc signs the temporary app with codesign --force --sign -.</p><p>Launches the helper in the user&#x27;s session with open -W -n. In this workflow, macOS applies the tel: and callto: link-handler requests without presenting the file-association style confirmation dialog seen with .eml or .pdf changes.</p><p>After the helper exits, queries both schemes again and independently verifies that each one now resolves to Zoom&#x27;s bundle identifier.</p><p>Returns exit 0 only when both handlers resolve to Zoom. If one or both remain unchanged, the script logs the specific failed scheme(s) and exits with status 2.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>The script standardizes click-to-call behavior so telephone links opened from browsers, email, documents, contact records, or other applications are routed into Zoom rather than another registered calling application.</p><p>Managing tel: and callto: together prevents inconsistent behavior where one type of telephone link opens Zoom while the other continues to use a different handler.</p><p>The workflow operates in the interactive user&#x27;s Launch Services context and verifies the result rather than assuming that a root-level request changed the user&#x27;s actual default application.</p></div></details><details><summary>Relationship To File Handler Scripts</summary><div class="section-body"><p>IMPORTANT DISTINCTION  This script changes URL/link handlers, not file associations. The separate .eml and .pdf workflows change which application opens a local file type.</p><p>In the current macOS behavior observed in this environment, changing a file opener such as Mail -&gt; Outlook for .eml or Preview -&gt; Adobe for PDFs can display a native confirmation prompt. Changing tel: and callto: to Zoom does not display that same user-confirmation prompt.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout warning">OPERATIONAL WARNING  Zoom must already be installed at the exact path /Applications/zoom.us.app. The script does not install Zoom or search alternate application locations.</div><div class="callout warning">OPERATIONAL NOTE  The script validates the installed Zoom build&#x27;s own CFBundleURLTypes before making changes. If a future Zoom release stops advertising tel or callto, the script will intentionally fail rather than forcing an unsupported association.</div><div class="callout danger">IMPORTANT CAVEAT  The helper waits a fixed 30 seconds rather than polling continuously for success. If Launch Services requires longer than that to commit either handler, the final verification can return exit 2 even if the operating system completes the change shortly afterward.</div><div class="callout warning">OPERATIONAL NOTE  The helper is deliberately configured with LSUIElement = true, so users should not see a temporary Dock icon while the handler requests are being processed.</div><p>The script does not configure Zoom account sign-in, Zoom Phone licensing, calling permissions, microphone access, notifications, or any Zoom application preference beyond the two Launch Services URL handlers.</p><p>The test telephone number +15555550100 is used only to construct sample URLs for handler discovery. The script does not place a call.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Set_Default_callto-tel_Handlers_to_Zoom.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Set_Default_callto-tel_Handlers_to_Zoom.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+# Sets Zoom as the signed-in user&#x27;s default handler for telephone links.
+# Intended for execution as root by NinjaOne on macOS 15 or later.
+
+PATH=&quot;/usr/bin:/bin:/usr/sbin:/sbin&quot;
+
+log_prefix=&quot;[DefaultCallingApp]&quot;
+target_app=&quot;/Applications/zoom.us.app&quot;
+target_plist=&quot;$target_app/Contents/Info.plist&quot;
+helper_name=&quot;Set Zoom as Default Calling App&quot;
+
+log() {
+    /bin/echo &quot;$log_prefix $*&quot;
+}
+
+console_user=$(/usr/bin/stat -f &quot;%Su&quot; /dev/console 2&gt;/dev/null)
+
+if [ -z &quot;$console_user&quot; ] || [ &quot;$console_user&quot; = &quot;root&quot; ] || [ &quot;$console_user&quot; = &quot;loginwindow&quot; ]; then
+    log &quot;No signed-in desktop user was found.&quot;
+    exit 1
+fi
+
+console_uid=$(/usr/bin/id -u &quot;$console_user&quot; 2&gt;/dev/null)
+
+if [ -z &quot;$console_uid&quot; ]; then
+    log &quot;Could not determine the UID for $console_user.&quot;
+    exit 1
+fi
+
+log &quot;Signed-in user: $console_user&quot;
+
+if [ ! -d &quot;$target_app&quot; ] || [ ! -f &quot;$target_plist&quot; ]; then
+    log &quot;Zoom was not found at $target_app.&quot;
+    exit 1
+fi
+
+target_bundle_id=$(/usr/libexec/PlistBuddy -c &quot;Print :CFBundleIdentifier&quot; &quot;$target_plist&quot; 2&gt;/dev/null)
+
+if [ -z &quot;$target_bundle_id&quot; ]; then
+    log &quot;Could not read Zoom&#x27;s bundle identifier.&quot;
+    exit 1
+fi
+
+log &quot;Zoom bundle identifier: $target_bundle_id&quot;
+
+zoom_url_types=$(/usr/libexec/PlistBuddy -c &quot;Print :CFBundleURLTypes&quot; &quot;$target_plist&quot; 2&gt;/dev/null)
+
+scheme_is_registered() {
+    /usr/bin/printf &#x27;%s\n&#x27; &quot;$zoom_url_types&quot; | /usr/bin/grep -Eq &quot;^[[:space:]]*$1[[:space:]]*$&quot;
+}
+
+for required_scheme in tel callto; do
+    if ! scheme_is_registered &quot;$required_scheme&quot;; then
+        log &quot;This Zoom installation does not advertise the $required_scheme URL scheme.&quot;
+        exit 1
+    fi
+done
+
+run_as_console_user() {
+    /bin/launchctl asuser &quot;$console_uid&quot; /usr/bin/sudo -H -u &quot;$console_user&quot; &quot;$@&quot;
+}
+
+working_directory=$(/usr/bin/mktemp -d &quot;/private/tmp/set-zoom-default.XXXXXX&quot;)
+
+if [ -z &quot;$working_directory&quot; ] || [ ! -d &quot;$working_directory&quot; ]; then
+    log &quot;Could not create a temporary working directory.&quot;
+    exit 1
+fi
+
+if ! /usr/sbin/chown &quot;$console_uid&quot; &quot;$working_directory&quot;; then
+    log &quot;Could not prepare the temporary working directory for $console_user.&quot;
+    /bin/rm -rf &quot;$working_directory&quot;
+    exit 1
+fi
+
+cleanup() {
+    if [ -n &quot;$working_directory&quot; ] &amp;&amp; [ -d &quot;$working_directory&quot; ]; then
+        /bin/rm -rf &quot;$working_directory&quot;
+    fi
+}
+
+trap cleanup EXIT HUP INT TERM
+
+query_source=&quot;$working_directory/query-handler.applescript&quot;
+helper_source=&quot;$working_directory/set-handler.applescript&quot;
+helper_app=&quot;$working_directory/$helper_name.app&quot;
+helper_plist=&quot;$helper_app/Contents/Info.plist&quot;
+compile_output=&quot;$working_directory/compile-output.txt&quot;
+
+/bin/cat &gt; &quot;$query_source&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27;
+use framework &quot;AppKit&quot;
+use framework &quot;Foundation&quot;
+
+on run arguments
+    if (count of arguments) is not 1 then return &quot;&quot;
+
+    set schemeName to item 1 of arguments
+    set testURLString to schemeName &amp; &quot;:+15555550100&quot;
+    set testURL to current application&#x27;s NSURL&#x27;s URLWithString:testURLString
+    if testURL is missing value then return &quot;&quot;
+
+    set workspace to current application&#x27;s NSWorkspace&#x27;s sharedWorkspace()
+    set applicationURL to workspace&#x27;s URLForApplicationToOpenURL:testURL
+    if applicationURL is missing value then return &quot;&quot;
+
+    set applicationBundle to current application&#x27;s NSBundle&#x27;s bundleWithURL:applicationURL
+    if applicationBundle is missing value then return &quot;&quot;
+
+    set bundleIdentifier to applicationBundle&#x27;s bundleIdentifier()
+    if bundleIdentifier is missing value then return &quot;&quot;
+
+    return bundleIdentifier as text
+end run
+APPLESCRIPT
+
+current_handler() {
+    run_as_console_user /usr/bin/osascript &quot;$query_source&quot; &quot;$1&quot; 2&gt;/dev/null
+}
+
+tel_before=$(current_handler tel)
+callto_before=$(current_handler callto)
+
+[ -n &quot;$tel_before&quot; ] || tel_before=&quot;(none)&quot;
+[ -n &quot;$callto_before&quot; ] || callto_before=&quot;(none)&quot;
+
+log &quot;Current tel handler: $tel_before&quot;
+log &quot;Current callto handler: $callto_before&quot;
+
+if [ &quot;$tel_before&quot; = &quot;$target_bundle_id&quot; ] &amp;&amp; [ &quot;$callto_before&quot; = &quot;$target_bundle_id&quot; ]; then
+    log &quot;Zoom is already the default calling app.&quot;
+    exit 0
+fi
+
+/bin/cat &gt; &quot;$helper_source&quot; &lt;&lt;APPLESCRIPT
+use framework &quot;AppKit&quot;
+use framework &quot;Foundation&quot;
+
+on run
+    set workspace to current application&#x27;s NSWorkspace&#x27;s sharedWorkspace()
+    set zoomURL to current application&#x27;s NSURL&#x27;s fileURLWithPath:&quot;$target_app&quot;
+
+    workspace&#x27;s setDefaultApplicationAtURL:zoomURL toOpenURLsWithScheme:&quot;tel&quot; completionHandler:(missing value)
+    workspace&#x27;s setDefaultApplicationAtURL:zoomURL toOpenURLsWithScheme:&quot;callto&quot; completionHandler:(missing value)
+
+    set stopDate to current application&#x27;s NSDate&#x27;s dateWithTimeIntervalSinceNow:30
+    current application&#x27;s NSRunLoop&#x27;s currentRunLoop()&#x27;s runUntilDate:stopDate
+end run
+APPLESCRIPT
+
+log &quot;Building temporary background NSWorkspace helper.&quot;
+
+if ! run_as_console_user /usr/bin/osacompile -o &quot;$helper_app&quot; &quot;$helper_source&quot; &gt;&quot;$compile_output&quot; 2&gt;&amp;1; then
+    log &quot;The temporary helper could not be built.&quot;
+    /bin/cat &quot;$compile_output&quot;
+    exit 1
+fi
+
+if ! /usr/libexec/PlistBuddy -c &quot;Add :LSUIElement bool true&quot; &quot;$helper_plist&quot; 2&gt;/dev/null; then
+    if ! /usr/libexec/PlistBuddy -c &quot;Set :LSUIElement true&quot; &quot;$helper_plist&quot; 2&gt;/dev/null; then
+        log &quot;The temporary helper could not be configured to run without a Dock icon.&quot;
+        exit 1
+    fi
+fi
+
+/usr/sbin/chown -R &quot;$console_uid&quot; &quot;$helper_app&quot; &quot;$query_source&quot; &quot;$helper_source&quot; 2&gt;/dev/null
+/bin/chmod -R u+rwX &quot;$helper_app&quot; 2&gt;/dev/null
+
+if ! run_as_console_user /usr/bin/codesign --force --sign - &quot;$helper_app&quot; &gt;&gt;&quot;$compile_output&quot; 2&gt;&amp;1; then
+    log &quot;The temporary background helper could not be signed.&quot;
+    /bin/cat &quot;$compile_output&quot;
+    exit 1
+fi
+
+log &quot;Requesting Zoom for tel and callto links.&quot;
+
+if ! run_as_console_user /usr/bin/open -W -n &quot;$helper_app&quot;; then
+    log &quot;The NSWorkspace helper did not complete successfully.&quot;
+    exit 1
+fi
+
+tel_after=$(current_handler tel)
+callto_after=$(current_handler callto)
+
+[ -n &quot;$tel_after&quot; ] || tel_after=&quot;(none)&quot;
+[ -n &quot;$callto_after&quot; ] || callto_after=&quot;(none)&quot;
+
+log &quot;tel handler after the request: $tel_after&quot;
+log &quot;callto handler after the request: $callto_after&quot;
+
+if [ &quot;$tel_after&quot; = &quot;$target_bundle_id&quot; ] &amp;&amp; [ &quot;$callto_after&quot; = &quot;$target_bundle_id&quot; ]; then
+    log &quot;Success: Zoom is now the default calling app.&quot;
+    exit 0
+fi
+
+if [ &quot;$tel_after&quot; != &quot;$target_bundle_id&quot; ]; then
+    log &quot;The tel handler was not changed to Zoom.&quot;
+fi
+
+if [ &quot;$callto_after&quot; != &quot;$target_bundle_id&quot; ]; then
+    log &quot;The callto handler was not changed to Zoom.&quot;
+fi
+
+log &quot;The request was submitted, but macOS did not register one or both handlers for Zoom.&quot;
+exit 2</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

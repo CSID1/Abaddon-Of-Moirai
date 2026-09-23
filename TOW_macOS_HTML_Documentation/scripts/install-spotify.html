@@ -1,0 +1,468 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Install Spotify.app Helper | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Install Spotify.app Helper</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Installs and normalizes the Spotify desktop application for the currently logged-in macOS user while preserving a stable system-visible application path for management workflows and Dock references.</p><p>The actual application is maintained at ~/Applications/Spotify.app, while /Applications/Spotify.app is recreated as a symbolic link pointing to that user-owned application bundle. The temporary Spotify bootstrapper is expected at /Applications/Install Spotify.app.</p><p>The script is designed to run as root from NinjaOne, but deliberately launches Spotify&#x27;s bootstrap installer inside the active user session. It validates the resulting application before declaring success.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Requires root execution by checking /usr/bin/id -u. Any non-root execution is stopped with an error because the workflow modifies /Applications, changes ownership, and creates a system-level symbolic link.</p><p>Detects the active GUI user from /dev/console using /usr/bin/stat -f &quot;%Su&quot; /dev/console. Empty values, root, and loginwindow are rejected because the installer requires a real logged-in user context.</p><p>Resolves the user&#x27;s UID, primary group, and home directory, then defines the actual Spotify destination as $USER_HOME/Applications/Spotify.app. The user-level Applications directory is created and assigned to the logged-in user when necessary.</p><p>Defines a reusable validation function for Spotify. A candidate bundle must exist, contain Contents/Info.plist, report bundle identifier com.spotify.client, pass codesign --verify --deep --strict, and report Team Identifier 2FNC3A47ZF.</p><p>Temporarily removes an existing /Applications/Spotify.app symbolic link before installation. This prevents Spotify&#x27;s own bootstrapper from mistaking the managed shortcut for a real system-level Spotify installation.</p><p>If a real /Applications/Spotify.app already exists, the script first validates it. When no valid user-level copy exists, the system copy is staged into ~/Applications with ditto, ownership is transferred to the logged-in user, the staged bundle is revalidated, and then it becomes the user-level copy.</p><p>Removes the original real system-level Spotify bundle only after a valid user-level copy has been established. If Spotify cannot be safely established in the user location, the script stops instead of deleting the system copy blindly.</p><p>Confirms that /Applications/Spotify.app is completely unoccupied and verifies that the bootstrapper exists at /Applications/Install Spotify.app before beginning a new installation attempt.</p><p>Launches Install Spotify.app as the logged-in user by combining launchctl asuser, sudo -H -u, and open -gj. This intentionally executes Spotify&#x27;s installer in the interactive user session even though the management script itself runs as root.</p><p>Waits up to 600 seconds for installation, checking every 5 seconds. The preferred result is a valid ~/Applications/Spotify.app. A validated user-level bundle is accepted after at least 15 seconds have elapsed.</p><p>Provides a safety path if Spotify unexpectedly installs a real bundle into /Applications. The script stops the user&#x27;s Spotify process, stages that application into ~/Applications, changes ownership, validates the staged copy, promotes it to the user location, and removes the original system installation.</p><p>Stops the user&#x27;s Spotify process before final normalization, recursively changes ownership of the actual Spotify bundle to the logged-in user and primary group, and performs a final validation of the user-level application.</p><p>Reads the final application owner and version from the validated user bundle. The script fails if the top-level Spotify application is not owned by the logged-in user.</p><p>Ensures no real system-level Spotify installation remains, then creates /Applications/Spotify.app as a symbolic link to ~/Applications/Spotify.app. The link target is explicitly checked with readlink.</p><p>Sets ownership of the symbolic link itself to root:wheel using chown -h. The -h option ensures the link is changed without altering the user-owned Spotify bundle behind it.</p><p>Performs one last Spotify validation, logs the final version, owner, actual application path, and shortcut target, and only then removes /Applications/Install Spotify.app. Successful completion exits with status 0.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>Spotify uses a user-oriented update model. Keeping the real application inside the logged-in user&#x27;s ~/Applications directory allows that user to own the application bundle rather than depending on repeated administrator authorization to modify a root-owned copy in /Applications.</p><p>The symbolic link preserves a predictable system-level path for components that expect Spotify at /Applications/Spotify.app even though the actual writable application is stored under the user&#x27;s home directory.</p><p>The validation steps reduce the risk of migrating or accepting an unrelated application merely because it is named Spotify.app. Both the expected bundle identifier and Spotify code-signing Team Identifier must match before the script treats a bundle as valid.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout warning">OPERATIONAL WARNING  The temporary bootstrapper must already exist at /Applications/Install Spotify.app. This helper does not download the installer itself.</div><div class="callout warning">OPERATIONAL WARNING  A real logged-in GUI user is required. The script intentionally fails when the console owner is root, loginwindow, or empty because the final Spotify application is user-specific and the bootstrapper is launched in that user&#x27;s session.</div><div class="callout danger">IMPORTANT CAVEAT  The system-visible link points into one specific user&#x27;s home directory. On a shared Mac, /Applications/Spotify.app therefore resolves to the Spotify installation owned by whichever user was active when this script last completed. This design is best suited to devices with one primary interactive user.</div><div class="callout danger">IMPORTANT CAVEAT  If a valid ~/Applications/Spotify.app already exists before the bootstrapper is launched, the wait loop can accept that existing bundle after 15 seconds. The script validates identity and signature, but it does not prove that the bootstrapper actually replaced or updated the existing version during that run.</div><p>SECURITY / VALIDATION NOTE  The expected application identity is hard-coded as bundle identifier com.spotify.client and Team Identifier 2FNC3A47ZF. If Spotify changes its signing identity or packaging model, legitimate future builds may fail validation until these values are reviewed.</p><div class="callout info">INTERPRETER NOTE  Although the filename ends in .zsh, the script declares #!/bin/bash as its interpreter. When executed normally, it runs under Bash rather than Zsh.</div><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Install_Spotify-app_Helper.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Install_Spotify-app_Helper.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+# ============================================================
+# Spotify User-Level Installer
+#
+# Actual application:
+#   ~/Applications/Spotify.app
+#
+# System-visible shortcut:
+#   /Applications/Spotify.app
+#       -&gt; ~/Applications/Spotify.app
+#
+# Temporary bootstrapper:
+#   /Applications/Install Spotify.app
+#
+# Designed to run as root from NinjaOne.
+# ============================================================
+
+INSTALLER_APP=&quot;/Applications/Install Spotify.app&quot;
+SYSTEM_SPOTIFY=&quot;/Applications/Spotify.app&quot;
+
+EXPECTED_BUNDLE_ID=&quot;com.spotify.client&quot;
+EXPECTED_TEAM_ID=&quot;2FNC3A47ZF&quot;
+
+TIMEOUT=600
+CHECK_INTERVAL=5
+
+log() {
+    echo &quot;[Spotify Install] $1&quot;
+}
+
+fail() {
+    log &quot;ERROR: $1&quot;
+    exit 1
+}
+
+# ------------------------------------------------------------
+# Require root
+# ------------------------------------------------------------
+
+if [[ &quot;$(/usr/bin/id -u)&quot; -ne 0 ]]; then
+    fail &quot;This script must run as root.&quot;
+fi
+
+# ------------------------------------------------------------
+# Locate logged-in user
+# ------------------------------------------------------------
+
+CONSOLE_USER=$(/usr/bin/stat -f &quot;%Su&quot; /dev/console)
+
+if [[ -z &quot;$CONSOLE_USER&quot; ||
+      &quot;$CONSOLE_USER&quot; == &quot;root&quot; ||
+      &quot;$CONSOLE_USER&quot; == &quot;loginwindow&quot; ]]; then
+
+    fail &quot;No logged-in GUI user was detected.&quot;
+fi
+
+USER_UID=$(/usr/bin/id -u &quot;$CONSOLE_USER&quot;)
+USER_GROUP=$(/usr/bin/id -gn &quot;$CONSOLE_USER&quot;)
+
+USER_HOME=$(
+    /usr/bin/dscl . -read &quot;/Users/$CONSOLE_USER&quot; NFSHomeDirectory 2&gt;/dev/null |
+    /usr/bin/awk &#x27;{print $2}&#x27;
+)
+
+if [[ -z &quot;$USER_HOME&quot; || ! -d &quot;$USER_HOME&quot; ]]; then
+    fail &quot;Unable to determine home directory for $CONSOLE_USER.&quot;
+fi
+
+USER_APPLICATIONS=&quot;$USER_HOME/Applications&quot;
+USER_SPOTIFY=&quot;$USER_APPLICATIONS/Spotify.app&quot;
+
+log &quot;Logged-in user: $CONSOLE_USER&quot;
+log &quot;Home directory: $USER_HOME&quot;
+log &quot;Actual Spotify target: $USER_SPOTIFY&quot;
+log &quot;System shortcut: $SYSTEM_SPOTIFY&quot;
+
+# ------------------------------------------------------------
+# Create ~/Applications if necessary
+# ------------------------------------------------------------
+
+if [[ ! -d &quot;$USER_APPLICATIONS&quot; ]]; then
+
+    log &quot;Creating ~/Applications...&quot;
+
+    /bin/mkdir -p &quot;$USER_APPLICATIONS&quot; ||
+        fail &quot;Unable to create $USER_APPLICATIONS&quot;
+
+    /usr/sbin/chown \
+        &quot;$CONSOLE_USER:$USER_GROUP&quot; \
+        &quot;$USER_APPLICATIONS&quot;
+fi
+
+# ------------------------------------------------------------
+# Spotify validation
+# ------------------------------------------------------------
+
+validate_spotify() {
+
+    local app=&quot;$1&quot;
+
+    [[ -d &quot;$app&quot; ]] || return 1
+    [[ -f &quot;$app/Contents/Info.plist&quot; ]] || return 1
+
+    local bundle_id
+    local team_id
+
+    bundle_id=$(
+        /usr/libexec/PlistBuddy \
+            -c &quot;Print :CFBundleIdentifier&quot; \
+            &quot;$app/Contents/Info.plist&quot; 2&gt;/dev/null
+    )
+
+    [[ &quot;$bundle_id&quot; == &quot;$EXPECTED_BUNDLE_ID&quot; ]] || return 1
+
+    /usr/bin/codesign \
+        --verify \
+        --deep \
+        --strict \
+        &quot;$app&quot; &gt;/dev/null 2&gt;&amp;1 || return 1
+
+    team_id=$(
+        /usr/bin/codesign -dv --verbose=4 &quot;$app&quot; 2&gt;&amp;1 |
+        /usr/bin/awk -F= &#x27;/^TeamIdentifier=/ {print $2; exit}&#x27;
+    )
+
+    [[ &quot;$team_id&quot; == &quot;$EXPECTED_TEAM_ID&quot; ]] || return 1
+
+    return 0
+}
+
+get_version() {
+
+    /usr/libexec/PlistBuddy \
+        -c &quot;Print :CFBundleShortVersionString&quot; \
+        &quot;$1/Contents/Info.plist&quot; 2&gt;/dev/null
+}
+
+# ------------------------------------------------------------
+# IMPORTANT:
+#
+# /Applications/Spotify.app may already be OUR shortcut.
+#
+# Remove the shortcut temporarily before running Spotify&#x27;s
+# installer so the bootstrapper cannot mistake it for a real
+# system-level installation.
+# ------------------------------------------------------------
+
+if [[ -L &quot;$SYSTEM_SPOTIFY&quot; ]]; then
+
+    EXISTING_TARGET=$(/usr/bin/readlink &quot;$SYSTEM_SPOTIFY&quot;)
+
+    log &quot;Existing Spotify shortcut detected.&quot;
+    log &quot;Shortcut target: $EXISTING_TARGET&quot;
+    log &quot;Temporarily removing shortcut...&quot;
+
+    /bin/rm -f &quot;$SYSTEM_SPOTIFY&quot; ||
+        fail &quot;Unable to remove existing Spotify shortcut.&quot;
+fi
+
+# ------------------------------------------------------------
+# Handle a REAL /Applications/Spotify.app
+#
+# Because symlinks were handled above, anything here is an
+# actual application bundle rather than our shortcut.
+# ------------------------------------------------------------
+
+if [[ -d &quot;$SYSTEM_SPOTIFY&quot; ]]; then
+
+    log &quot;Real system-level Spotify installation detected.&quot;
+
+    if ! validate_spotify &quot;$SYSTEM_SPOTIFY&quot;; then
+        fail &quot;/Applications/Spotify.app exists but failed Spotify validation.&quot;
+    fi
+
+    # Preserve it as the user&#x27;s copy before removing it.
+    if ! validate_spotify &quot;$USER_SPOTIFY&quot;; then
+
+        log &quot;Migrating system Spotify into user Applications...&quot;
+
+        /usr/bin/pkill \
+            -u &quot;$USER_UID&quot; \
+            -x &quot;Spotify&quot; &gt;/dev/null 2&gt;&amp;1 || true
+
+        STAGING_APP=&quot;$USER_APPLICATIONS/.Spotify.app.staging.$$&quot;
+
+        /bin/rm -rf &quot;$STAGING_APP&quot;
+
+        /usr/bin/ditto \
+            &quot;$SYSTEM_SPOTIFY&quot; \
+            &quot;$STAGING_APP&quot; ||
+            fail &quot;Unable to copy Spotify into user Applications.&quot;
+
+        /usr/sbin/chown -R \
+            &quot;$CONSOLE_USER:$USER_GROUP&quot; \
+            &quot;$STAGING_APP&quot;
+
+        if ! validate_spotify &quot;$STAGING_APP&quot;; then
+
+            /bin/rm -rf &quot;$STAGING_APP&quot;
+            fail &quot;Migrated Spotify failed validation.&quot;
+        fi
+
+        /bin/rm -rf &quot;$USER_SPOTIFY&quot;
+
+        /bin/mv \
+            &quot;$STAGING_APP&quot; \
+            &quot;$USER_SPOTIFY&quot; ||
+            fail &quot;Unable to finalize user-level Spotify.&quot;
+    fi
+
+    if validate_spotify &quot;$USER_SPOTIFY&quot;; then
+
+        log &quot;Removing original system-level Spotify...&quot;
+
+        /bin/rm -rf &quot;$SYSTEM_SPOTIFY&quot;
+
+    else
+
+        fail &quot;User-level Spotify could not be established safely.&quot;
+    fi
+fi
+
+# ------------------------------------------------------------
+# Make sure nothing unexpected occupies our shortcut path
+# ------------------------------------------------------------
+
+if [[ -e &quot;$SYSTEM_SPOTIFY&quot; || -L &quot;$SYSTEM_SPOTIFY&quot; ]]; then
+    fail &quot;$SYSTEM_SPOTIFY is unexpectedly occupied.&quot;
+fi
+
+# ------------------------------------------------------------
+# Confirm bootstrap installer
+# ------------------------------------------------------------
+
+if [[ ! -d &quot;$INSTALLER_APP&quot; ]]; then
+    fail &quot;Install Spotify.app not found at $INSTALLER_APP&quot;
+fi
+
+# ------------------------------------------------------------
+# Launch bootstrapper AS logged-in user
+# ------------------------------------------------------------
+
+log &quot;Launching Install Spotify.app as $CONSOLE_USER...&quot;
+
+if ! /bin/launchctl asuser &quot;$USER_UID&quot; \
+    /usr/bin/sudo -H -u &quot;$CONSOLE_USER&quot; \
+    /usr/bin/open -gj &quot;$INSTALLER_APP&quot;; then
+
+    fail &quot;Unable to launch Install Spotify.app.&quot;
+fi
+
+/bin/sleep 5
+
+# ------------------------------------------------------------
+# Wait for installation
+# ------------------------------------------------------------
+
+log &quot;Waiting for Spotify installation...&quot;
+
+START_TIME=$(/bin/date +%s)
+
+while true; do
+
+    NOW=$(/bin/date +%s)
+    ELAPSED=$((NOW - START_TIME))
+
+    if (( ELAPSED &gt;= TIMEOUT )); then
+        fail &quot;Spotify installation timed out after ${TIMEOUT} seconds.&quot;
+    fi
+
+    # --------------------------------------------------------
+    # Preferred result:
+    #
+    # ~/Applications/Spotify.app
+    # --------------------------------------------------------
+
+    if validate_spotify &quot;$USER_SPOTIFY&quot;; then
+
+        if (( ELAPSED &gt;= 15 )); then
+            break
+        fi
+    fi
+
+    # --------------------------------------------------------
+    # Safety net:
+    #
+    # If Spotify creates a REAL /Applications/Spotify.app,
+    # migrate it into ~/Applications.
+    #
+    # Explicit -L check guarantees our shortcut could never
+    # be mistaken for an actual system Spotify installation.
+    # --------------------------------------------------------
+
+    if [[ ! -L &quot;$SYSTEM_SPOTIFY&quot; ]] &amp;&amp;
+       validate_spotify &quot;$SYSTEM_SPOTIFY&quot;; then
+
+        log &quot;Spotify unexpectedly installed system-wide.&quot;
+        log &quot;Moving installation to user Applications...&quot;
+
+        /usr/bin/pkill \
+            -u &quot;$USER_UID&quot; \
+            -x &quot;Spotify&quot; &gt;/dev/null 2&gt;&amp;1 || true
+
+        STAGING_APP=&quot;$USER_APPLICATIONS/.Spotify.app.staging.$$&quot;
+
+        /bin/rm -rf &quot;$STAGING_APP&quot;
+
+        /usr/bin/ditto \
+            &quot;$SYSTEM_SPOTIFY&quot; \
+            &quot;$STAGING_APP&quot; ||
+            fail &quot;Unable to stage system Spotify.&quot;
+
+        /usr/sbin/chown -R \
+            &quot;$CONSOLE_USER:$USER_GROUP&quot; \
+            &quot;$STAGING_APP&quot;
+
+        if ! validate_spotify &quot;$STAGING_APP&quot;; then
+
+            /bin/rm -rf &quot;$STAGING_APP&quot;
+            fail &quot;Staged Spotify failed validation.&quot;
+        fi
+
+        /bin/rm -rf &quot;$USER_SPOTIFY&quot;
+
+        /bin/mv \
+            &quot;$STAGING_APP&quot; \
+            &quot;$USER_SPOTIFY&quot; ||
+            fail &quot;Unable to move Spotify into user Applications.&quot;
+
+        if validate_spotify &quot;$USER_SPOTIFY&quot;; then
+
+            /bin/rm -rf &quot;$SYSTEM_SPOTIFY&quot;
+
+        else
+
+            fail &quot;User-level Spotify failed validation after migration.&quot;
+        fi
+
+        break
+    fi
+
+    /bin/sleep &quot;$CHECK_INTERVAL&quot;
+done
+
+# ------------------------------------------------------------
+# Stop Spotify temporarily before final checks
+# ------------------------------------------------------------
+
+/usr/bin/pkill \
+    -u &quot;$USER_UID&quot; \
+    -x &quot;Spotify&quot; &gt;/dev/null 2&gt;&amp;1 || true
+
+/bin/sleep 2
+
+# ------------------------------------------------------------
+# Ensure user owns actual Spotify bundle
+# ------------------------------------------------------------
+
+/usr/sbin/chown -R \
+    &quot;$CONSOLE_USER:$USER_GROUP&quot; \
+    &quot;$USER_SPOTIFY&quot;
+
+# ------------------------------------------------------------
+# Verify actual user-level installation
+# ------------------------------------------------------------
+
+if ! validate_spotify &quot;$USER_SPOTIFY&quot;; then
+    fail &quot;Final user-level Spotify installation failed validation.&quot;
+fi
+
+FINAL_OWNER=$(/usr/bin/stat -f &quot;%Su&quot; &quot;$USER_SPOTIFY&quot;)
+FINAL_VERSION=$(get_version &quot;$USER_SPOTIFY&quot;)
+
+if [[ &quot;$FINAL_OWNER&quot; != &quot;$CONSOLE_USER&quot; ]]; then
+    fail &quot;Spotify is not owned by $CONSOLE_USER.&quot;
+fi
+
+# ------------------------------------------------------------
+# Ensure no REAL system-level Spotify remains
+# ------------------------------------------------------------
+
+if [[ -e &quot;$SYSTEM_SPOTIFY&quot; || -L &quot;$SYSTEM_SPOTIFY&quot; ]]; then
+
+    if [[ -L &quot;$SYSTEM_SPOTIFY&quot; ]]; then
+        /bin/rm -f &quot;$SYSTEM_SPOTIFY&quot;
+    else
+        fail &quot;A real system-level Spotify.app still exists.&quot;
+    fi
+fi
+
+# ------------------------------------------------------------
+# Create system-visible shortcut
+#
+# /Applications/Spotify.app
+#       -&gt;
+# ~/Applications/Spotify.app
+# ------------------------------------------------------------
+
+log &quot;Creating /Applications/Spotify.app shortcut...&quot;
+
+if ! /bin/ln -s \
+    &quot;$USER_SPOTIFY&quot; \
+    &quot;$SYSTEM_SPOTIFY&quot;; then
+
+    fail &quot;Unable to create Spotify shortcut.&quot;
+fi
+
+# ------------------------------------------------------------
+# Verify shortcut itself
+# ------------------------------------------------------------
+
+if [[ ! -L &quot;$SYSTEM_SPOTIFY&quot; ]]; then
+    fail &quot;Spotify shortcut was not created correctly.&quot;
+fi
+
+SHORTCUT_TARGET=$(/usr/bin/readlink &quot;$SYSTEM_SPOTIFY&quot;)
+
+if [[ &quot;$SHORTCUT_TARGET&quot; != &quot;$USER_SPOTIFY&quot; ]]; then
+    fail &quot;Spotify shortcut points to unexpected target: $SHORTCUT_TARGET&quot;
+fi
+
+# Make ownership of the LINK itself root:wheel.
+# This does NOT change the ownership of the Spotify app.
+#
+# -h tells chown to modify the symlink, not its target.
+
+/usr/sbin/chown -h root:wheel &quot;$SYSTEM_SPOTIFY&quot;
+
+# ------------------------------------------------------------
+# One final validation through the target
+# ------------------------------------------------------------
+
+if ! validate_spotify &quot;$USER_SPOTIFY&quot;; then
+    fail &quot;Spotify became invalid after shortcut creation.&quot;
+fi
+
+log &quot;Spotify successfully verified.&quot;
+log &quot;&quot;
+log &quot;Actual application:&quot;
+log &quot;  $USER_SPOTIFY&quot;
+log &quot;  Version: $FINAL_VERSION&quot;
+log &quot;  Owner: $FINAL_OWNER&quot;
+log &quot;&quot;
+log &quot;System shortcut:&quot;
+log &quot;  $SYSTEM_SPOTIFY&quot;
+log &quot;  -&gt; $SHORTCUT_TARGET&quot;
+log &quot;&quot;
+
+# ------------------------------------------------------------
+# Remove bootstrapper ONLY after:
+#
+# ✓ Spotify verified
+# ✓ user ownership verified
+# ✓ system installation absent
+# ✓ shortcut created
+# ✓ shortcut target verified
+# ------------------------------------------------------------
+
+log &quot;Removing Install Spotify.app...&quot;
+
+if ! /bin/rm -rf &quot;$INSTALLER_APP&quot;; then
+    fail &quot;Spotify installed successfully, but bootstrapper removal failed.&quot;
+fi
+
+log &quot;Installation complete.&quot;
+
+exit 0</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

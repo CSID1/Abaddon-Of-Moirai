@@ -1,0 +1,143 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Set Default mailto: Handler to Outlook | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Set Default mailto: Handler to Outlook</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Sets Microsoft Outlook as the signed-in user&#x27;s default application for mailto: URL links on macOS.</p><p>This controls what application opens when a browser, document, contact record, or other application launches a link such as mailto:user@example.com. It is separate from the .eml file-association workflow, which controls which application opens saved email-message files.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Runs under #!/bin/bash and defines a restricted executable PATH=/usr/bin:/bin:/usr/sbin:/sbin.</p><p>Defines /Applications/Microsoft Outlook.app as the target application and com.microsoft.Outlook as the expected Launch Services bundle identifier.</p><p>Determines the active console user with stat -f &quot;%Su&quot; /dev/console. An empty value, root, or loginwindow is treated as no valid interactive user and causes an exit with status 1.</p><p>Resolves the signed-in user&#x27;s numeric UID with id -u and verifies that Outlook exists at /Applications/Microsoft Outlook.app before attempting any handler change.</p><p>Defines run_as_console_user() using launchctl asuser and sudo -H -u so Launch Services operations execute inside the signed-in user&#x27;s graphical session rather than only in the management process context.</p><p>Queries the current mailto: handler through an inline AppleScriptObjC block using NSWorkspace&#x27;s URLForApplicationToOpenURL method and the test URL mailto:test@example.invalid.</p><p>Returns the current application&#x27;s bundle identifier when available. If Launch Services cannot provide a normal bundle object, the query falls back to the resolved application path; if no handler exists, it returns NONE.</p><p>If the current handler already equals com.microsoft.Outlook, the script logs that Outlook is already the default mailto: handler and exits successfully without building a helper application.</p><p>If Outlook is not already the handler, creates a private temporary working directory under /private/tmp/default-mail.XXXXXX and registers an EXIT trap that removes the directory when the script ends.</p><p>Generates an AppleScriptObjC helper that activates as a regular GUI application, resolves /Applications/Microsoft Outlook.app to an NSURL, and calls setDefaultApplicationAtURL:toOpenURLsWithScheme:completionHandler: for the mailto scheme.</p><p>Keeps the helper&#x27;s Cocoa run loop alive for 45 seconds after submitting the asynchronous request so macOS has time to process the Launch Services handler change.</p><p>Compiles the helper into Default Mail Setup.app using osacompile. If compilation fails or the resulting app bundle does not exist, the script exits with status 1.</p><p>Changes ownership of the temporary directory to the signed-in user and applies u+rwX,go+rX permissions so the helper can run normally in that user&#x27;s session.</p><p>Launches the temporary helper with open -W -n. The -W option waits for the helper to finish, while -n requests a new application instance.</p><p>In the current environment, changing the mailto: link handler to Outlook does not present the same native two-button confirmation prompt seen with file associations such as .eml or .pdf. The change is processed as a URL-handler assignment.</p><p>After the helper finishes, queries the mailto: handler again and verifies the result rather than assuming the API request succeeded.</p><p>Returns exit 0 only when the verified handler equals com.microsoft.Outlook. If the handler remains unchanged, the script logs that no Launch Services preference files were directly modified and exits with status 2.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>The script standardizes compose-link behavior so clicking an email link launches Microsoft Outlook rather than Apple Mail or another registered mail application.</p><p>Running the request in the interactive user&#x27;s Launch Services context is important because default URL handlers are user-specific behavior. The final verification confirms the setting that the signed-in user will actually receive.</p><p>The script uses Apple&#x27;s NSWorkspace API rather than directly editing Launch Services preference files or databases.</p></div></details><details><summary>Relationship To .Eml File Handling</summary><div class="section-body"><p>IMPORTANT DISTINCTION  This script manages the mailto: URL scheme only. It does not determine which application opens a saved .eml file.</p><p>Tow therefore manages the two behaviors separately: the .eml workflow controls saved-message files and can trigger a native macOS confirmation prompt; this mailto: workflow controls email links and, in observed use, applies without that file-opener confirmation.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout warning">OPERATIONAL WARNING  Outlook must already exist at the exact path /Applications/Microsoft Outlook.app. The script does not install Outlook or search alternate application locations.</div><div class="callout warning">OPERATIONAL NOTE  The script hard-codes the expected bundle identifier as com.microsoft.Outlook rather than reading CFBundleIdentifier from Outlook&#x27;s Info.plist. A future Microsoft packaging change that alters the bundle identifier would require the script to be updated.</div><p>OBSERVED BEHAVIOR NOTE  The helper source and log text were written defensively to allow for the possibility that macOS could display a confirmation request, and the helper is kept alive for 45 seconds. In the current Tow environment, however, mailto: handler changes have not displayed that confirmation prompt.</p><div class="callout danger">IMPORTANT CAVEAT  The helper waits a fixed 45 seconds and does not poll for early success. Even when Launch Services applies the handler almost immediately, open -W waits for the helper to finish its full run-loop period before the shell performs final verification.</div><div class="callout warning">OPERATIONAL NOTE  The helper uses NSApplicationActivationPolicyRegular and activates itself. It is not marked LSUIElement like the Zoom link-handler helper, so the temporary helper can briefly behave as a normal GUI application while it runs.</div><div class="callout danger">IMPORTANT CAVEAT  The script is designed for privileged management execution but contains no explicit EUID/root check. If launched outside the normal root-based NinjaOne workflow, the sudo -u, ownership, or helper-management operations may fail.</div><p>The test address test@example.invalid uses the reserved .invalid domain only to construct a sample URL for handler discovery. No email is sent.</p><p>The script does not configure Outlook account setup, Exchange connectivity, notifications, .eml handling, browser SSO, or any Outlook preference beyond the mailto: Launch Services handler.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Set_Default_Mailto_Handler_to_Outlook.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Set_Default_Mailto_Handler_to_Outlook.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+PATH=&quot;/usr/bin:/bin:/usr/sbin:/sbin&quot;
+
+TARGET_APP=&quot;/Applications/Microsoft Outlook.app&quot;
+TARGET_BUNDLE_ID=&quot;com.microsoft.Outlook&quot;
+
+log() {
+    echo &quot;[DefaultMail] $*&quot;
+}
+
+console_user=$(/usr/bin/stat -f &quot;%Su&quot; /dev/console)
+
+if [[ -z &quot;$console_user&quot; || &quot;$console_user&quot; == &quot;root&quot; || &quot;$console_user&quot; == &quot;loginwindow&quot; ]]; then
+    log &quot;No signed-in user was detected.&quot;
+    exit 1
+fi
+
+console_uid=$(/usr/bin/id -u &quot;$console_user&quot;)
+
+if [[ ! -d &quot;$TARGET_APP&quot; ]]; then
+    log &quot;Outlook was not found at: $TARGET_APP&quot;
+    exit 1
+fi
+
+run_as_console_user() {
+    /bin/launchctl asuser &quot;$console_uid&quot; \
+        /usr/bin/sudo -H -u &quot;$console_user&quot; &quot;$@&quot;
+}
+
+get_mailto_handler() {
+    run_as_console_user /usr/bin/osascript &lt;&lt;&#x27;APPLESCRIPT&#x27;
+use framework &quot;AppKit&quot;
+use framework &quot;Foundation&quot;
+
+set workspace to current application&#x27;s NSWorkspace&#x27;s sharedWorkspace()
+set mailtoURL to current application&#x27;s NSURL&#x27;s URLWithString:&quot;mailto:test@example.invalid&quot;
+set applicationURL to workspace&#x27;s URLForApplicationToOpenURL:mailtoURL
+
+if applicationURL is missing value then
+    return &quot;NONE&quot;
+end if
+
+set applicationBundle to current application&#x27;s NSBundle&#x27;s bundleWithURL:applicationURL
+
+if applicationBundle is missing value then
+    return applicationURL&#x27;s |path|() as text
+end if
+
+set bundleIdentifier to applicationBundle&#x27;s bundleIdentifier()
+
+if bundleIdentifier is missing value then
+    return applicationURL&#x27;s |path|() as text
+end if
+
+return bundleIdentifier as text
+APPLESCRIPT
+}
+
+current_handler=$(get_mailto_handler)
+
+log &quot;Signed-in user: $console_user&quot;
+log &quot;Current mailto handler: $current_handler&quot;
+
+if [[ &quot;$current_handler&quot; == &quot;$TARGET_BUNDLE_ID&quot; ]]; then
+    log &quot;Outlook is already the default mailto handler.&quot;
+    exit 0
+fi
+
+temporary_directory=$(/usr/bin/mktemp -d &quot;/private/tmp/default-mail.XXXXXX&quot;)
+applet_source=&quot;$temporary_directory/main.applescript&quot;
+applet_path=&quot;$temporary_directory/Default Mail Setup.app&quot;
+
+cleanup() {
+    if [[ -n &quot;$temporary_directory&quot; &amp;&amp; -d &quot;$temporary_directory&quot; ]]; then
+        /bin/rm -rf &quot;$temporary_directory&quot;
+    fi
+}
+
+trap cleanup EXIT
+
+/bin/cat &gt; &quot;$applet_source&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27;
+use framework &quot;AppKit&quot;
+use framework &quot;Foundation&quot;
+use scripting additions
+
+on run
+    set applicationObject to current application&#x27;s NSApplication&#x27;s sharedApplication()
+
+    applicationObject&#x27;s setActivationPolicy:(current application&#x27;s NSApplicationActivationPolicyRegular)
+    applicationObject&#x27;s activateIgnoringOtherApps:true
+
+    set workspace to current application&#x27;s NSWorkspace&#x27;s sharedWorkspace()
+    set outlookURL to current application&#x27;s NSURL&#x27;s fileURLWithPath:&quot;/Applications/Microsoft Outlook.app&quot;
+
+    workspace&#x27;s setDefaultApplicationAtURL:outlookURL ¬
+        toOpenURLsWithScheme:&quot;mailto&quot; ¬
+        completionHandler:(missing value)
+
+    -- Keep this GUI process and its Cocoa event loop alive so macOS can
+    -- display and process the default-application consent request.
+    set expirationDate to current application&#x27;s NSDate&#x27;s dateWithTimeIntervalSinceNow:45
+    current application&#x27;s NSRunLoop&#x27;s currentRunLoop()&#x27;s runUntilDate:expirationDate
+end run
+APPLESCRIPT
+
+log &quot;Building temporary user-facing NSWorkspace helper.&quot;
+
+/usr/bin/osacompile -o &quot;$applet_path&quot; &quot;$applet_source&quot;
+
+compile_status=$?
+
+if [[ &quot;$compile_status&quot; -ne 0 || ! -d &quot;$applet_path&quot; ]]; then
+    log &quot;Unable to build the temporary helper.&quot;
+    exit 1
+fi
+
+/usr/sbin/chown -R &quot;$console_uid&quot; &quot;$temporary_directory&quot;
+/bin/chmod -R u+rwX,go+rX &quot;$temporary_directory&quot;
+
+log &quot;Launching the NSWorkspace helper for $console_user.&quot;
+log &quot;A macOS confirmation window may now appear.&quot;
+
+run_as_console_user /usr/bin/open -W -n &quot;$applet_path&quot;
+
+launch_status=$?
+
+if [[ &quot;$launch_status&quot; -ne 0 ]]; then
+    log &quot;The temporary helper returned exit code $launch_status.&quot;
+fi
+
+current_handler=$(get_mailto_handler)
+
+log &quot;Mailto handler after the request: $current_handler&quot;
+
+if [[ &quot;$current_handler&quot; == &quot;$TARGET_BUNDLE_ID&quot; ]]; then
+    log &quot;Success: Outlook is now the default mailto handler.&quot;
+    exit 0
+fi
+
+log &quot;The NSWorkspace request completed without changing the handler.&quot;
+log &quot;No Launch Services preference files were modified.&quot;
+exit 2</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

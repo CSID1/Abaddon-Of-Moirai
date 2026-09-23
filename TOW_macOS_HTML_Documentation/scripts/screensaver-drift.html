@@ -1,0 +1,331 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Set Screensaver to Drift | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Set Screensaver to Drift</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Configures Apple&#x27;s Drift screen saver for the currently logged-in user on macOS Tahoe 26 while preserving the user&#x27;s existing wallpaper configuration and normalizing that wallpaper to the Show on all Spaces model.</p><p>The script performs this by modifying the user&#x27;s wallpaper store at ~/Library/Application Support/com.apple.wallpaper/Store/Index.plist, validating the replacement before and after installation, coordinating with WallpaperAgent, and automatically restoring the prior store if the live configuration does not survive the change.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Runs under #!/bin/sh despite the script file using a .zsh extension, and enables set -eu. Unhandled command failures and references to unset variables therefore terminate execution.</p><p>Defines the target screen saver as Drift and the exact system module as file:///System/Library/ExtensionKit/Extensions/Drift.appex. The script retains the newest 3 pre-change backups.</p><p>Reads the installed macOS version with sw_vers -productVersion and refuses to run unless the major version is exactly 26. Any other version exits with status 1 because the script has only been validated against macOS Tahoe 26.x.</p><p>Determines the active console user through stat -f &#x27;%Su&#x27; /dev/console. Empty values and the accounts root, loginwindow, and _mbsetupuser are rejected because the script requires a normal graphical user session.</p><p>Resolves the user&#x27;s home directory from dscl and falls back to /Users/&lt;username&gt; if the directory-service lookup is empty or does not point to an existing directory.</p><p>Targets the per-user wallpaper store at $USER_HOME/Library/Application Support/com.apple.wallpaper/Store/Index.plist. If that store does not exist, the script stops without attempting to construct a replacement from scratch.</p><p>Reads the currently configured idle/screen-saver module from AllSpacesAndDisplays.Idle.Content.Choices.0.Configuration. The embedded configuration is Base64-decoded and inspected for module.relative.</p><p>Checks whether the global wallpaper state already contains either AllSpacesAndDisplays.Desktop or AllSpacesAndDisplays.Linked. If the module is already Drift and a global wallpaper state exists, the script exits successfully with No changes required.</p><p>Creates a timestamped backup named Index.plist.pre-drift-YYYYMMDD-HHMMSS.bak, a temporary working copy named Index.plist.drift-work, and a temporary directory under /tmp/drift-saver.XXXXXX.</p><p>Records the original wallpaper store&#x27;s numeric owner UID, group GID, and permission mode before making changes so those exact file-system attributes can be restored after replacement.</p><p>Registers an exit cleanup routine that removes temporary files and resumes any WallpaperAgent processes that were paused but not yet deliberately terminated.</p><p>Creates the backup and working copy using cp -p, preserving the original file metadata in both copies.</p><p>Normalizes the Show on all Spaces model. If AllSpacesAndDisplays already contains Desktop or Linked, that global state is accepted. Otherwise the script clones SystemDefault into AllSpacesAndDisplays and clears the separate Spaces and Displays dictionaries.</p><p>Builds a new Idle configuration containing Apple&#x27;s screen-saver provider com.apple.wallpaper.choice.screen-saver and an embedded module configuration that resolves exactly to file:///System/Library/ExtensionKit/Extensions/Drift.appex.</p><p>The embedded option-values plist contains an empty values dictionary, so the script selects the Drift module without defining additional Drift-specific options.</p><p>Updates both AllSpacesAndDisplays and SystemDefault. If either scope uses Linked wallpaper state, the script converts that state into Desktop before inserting the new Idle screen-saver configuration.</p><p>Sets each edited scope&#x27;s Type to individual and replaces any existing Idle entry with the newly generated Drift configuration.</p><p>Validates the entire working plist with plutil -lint, re-reads the embedded module from the working copy, and requires it to equal the expected Drift module.</p><p>Also requires the working copy to contain AllSpacesAndDisplays.Desktop before touching the live store. A failed validation exits before live replacement occurs.</p><p>Finds WallpaperAgent processes belonging specifically to the signed-in user&#x27;s UID and temporarily pauses them with SIGSTOP. This reduces the chance that WallpaperAgent rewrites the store while the prepared plist is being installed.</p><p>Replaces the live Index.plist with the validated working file using mv -f, then restores the original UID, GID, and permission mode recorded before modification.</p><p>Terminates the previously paused WallpaperAgent processes with SIGKILL so macOS can relaunch the agent and load the newly installed wallpaper/screen-saver state.</p><p>Waits 2 seconds and then re-reads the live store. Success requires both the exact Drift module and a retained AllSpacesAndDisplays.Desktop global wallpaper state.</p><p>If live validation fails, restores the timestamped backup to Index.plist, reapplies the original owner/group/mode, terminates any newly running user WallpaperAgent processes so the restored configuration can reload, and exits with status 1.</p><p>After a successful live validation, removes older Index.plist.pre-drift-*.bak files so only the newest 3 backups are retained.</p><p>Prints a final success summary containing the selected screen saver, resolved module path, whether Show on all Spaces required normalization, the backup path, and the configured backup-retention count.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>The script standardizes Drift as the user&#x27;s screen saver while deliberately avoiding replacement of the user&#x27;s actual desktop wallpaper.</p><p>It also normalizes the wallpaper store around the global AllSpacesAndDisplays state so the existing wallpaper is represented as applying across Spaces rather than maintaining separate per-Space/per-display state.</p><p>Because the script validates a temporary copy before installation and then validates the live store again after WallpaperAgent reloads, it is designed to fail closed and restore the prior configuration rather than leave a partially written or rejected wallpaper database in place.</p></div></details><details><summary>Safety And Rollback Behavior</summary><div class="section-body"><p>A new timestamped backup is created before any live wallpaper-store replacement. The original live file is never edited in place; changes are prepared in Index.plist.drift-work first.</p><p>Temporary-plist validation occurs before the live store is replaced, including both syntax validation and verification of the embedded Drift module.</p><p>After the replacement, the script checks what WallpaperAgent actually retained. If the expected Drift/global-wallpaper state is absent, the prior backup is automatically copied back into place.</p><p>Only after live verification succeeds does the script prune older backups, retaining the newest 3 rollback copies.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><p>IMPORTANT VERSION CAVEAT  This implementation is intentionally locked to macOS 26.x. It directly manipulates the structure of com.apple.wallpaper/Store/Index.plist, so a future macOS release that changes Apple&#x27;s wallpaper-store schema, module path, or WallpaperAgent behavior must be validated before the version guard is expanded.</p><p>IMPORTANT IMPLEMENTATION CAVEAT  The script depends on Apple&#x27;s on-disk wallpaper store rather than a documented configuration-profile payload or a simple defaults preference. The exact plist keys and nested data structures are therefore implementation details that may be more fragile across OS changes than supported management interfaces.</p><div class="callout warning">OPERATIONAL WARNING  The script does not contain an explicit root/EUID check. Its live replacement, ownership restoration, and WallpaperAgent process control are intended for the normal privileged NinjaOne execution context. Running it manually without sufficient privileges can fail partway through.</div><div class="callout warning">OPERATIONAL NOTE  The script requires an existing per-user Index.plist. It does not initialize the wallpaper database for a user who has never generated the expected wallpaper-store structure.</div><div class="callout warning">OPERATIONAL NOTE  The early no-change check accepts either Desktop or Linked as an already-global wallpaper state. During remediation, Linked is converted into Desktop before the Drift configuration is written.</div><p>IMPORTANT BEHAVIORAL NOTE  When no global AllSpacesAndDisplays wallpaper state exists, the script copies SystemDefault into that scope and clears the separate Spaces and Displays dictionaries. This is the mechanism used to enable the script&#x27;s Show on all Spaces behavior and intentionally collapses per-Space/per-display wallpaper state into a global model.</p><p>The script targets only the user currently represented by /dev/console. Other local accounts retain their own separate wallpaper/screen-saver stores.</p><p>The filename uses a .zsh extension, but the interpreter is /bin/sh. Any future syntax changes should remain compatible with that interpreter unless the shebang is intentionally changed.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Set_Screensaver_to_Drift.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Set_Screensaver_to_Drift.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/sh
+set -eu
+
+TARGET_SAVER=&quot;Drift&quot;
+TARGET_MODULE=&quot;file:///System/Library/ExtensionKit/Extensions/Drift.appex&quot;
+KEEP_BACKUPS=3
+
+PRODUCT_VERSION=&quot;$(/usr/bin/sw_vers -productVersion)&quot;
+MAJOR_VERSION=&quot;${PRODUCT_VERSION%%.*}&quot;
+
+if [ &quot;$MAJOR_VERSION&quot; != &quot;26&quot; ]; then
+    echo &quot;ERROR: Unsupported macOS version: $PRODUCT_VERSION&quot;
+    echo &quot;This script has only been validated on macOS Tahoe 26.x.&quot;
+    exit 1
+fi
+
+echo &quot;macOS version: $PRODUCT_VERSION&quot;
+echo &quot;Version guard: PASSED&quot;
+
+CONSOLE_USER=&quot;$(/usr/bin/stat -f &#x27;%Su&#x27; /dev/console)&quot;
+
+if [ -z &quot;$CONSOLE_USER&quot; ] || [ &quot;$CONSOLE_USER&quot; = &quot;root&quot; ] || [ &quot;$CONSOLE_USER&quot; = &quot;loginwindow&quot; ] || [ &quot;$CONSOLE_USER&quot; = &quot;_mbsetupuser&quot; ]; then
+    echo &quot;ERROR: No usable logged-in GUI user found.&quot;
+    exit 1
+fi
+
+USER_UID=&quot;$(/usr/bin/id -u &quot;$CONSOLE_USER&quot;)&quot;
+
+USER_HOME=&quot;$(/usr/bin/dscl . -read &quot;/Users/$CONSOLE_USER&quot; NFSHomeDirectory 2&gt;/dev/null | /usr/bin/awk &#x27;{print $2}&#x27;)&quot;
+
+if [ -z &quot;$USER_HOME&quot; ] || [ ! -d &quot;$USER_HOME&quot; ]; then
+    USER_HOME=&quot;/Users/$CONSOLE_USER&quot;
+fi
+
+STORE_DIR=&quot;$USER_HOME/Library/Application Support/com.apple.wallpaper/Store&quot;
+STORE=&quot;$STORE_DIR/Index.plist&quot;
+
+if [ ! -f &quot;$STORE&quot; ]; then
+    echo &quot;ERROR: Wallpaper store not found:&quot;
+    echo &quot;$STORE&quot;
+    exit 1
+fi
+
+CURRENT_MODULE=&quot;$(
+    /usr/bin/plutil -extract \
+        &quot;AllSpacesAndDisplays.Idle.Content.Choices.0.Configuration&quot; \
+        raw &quot;$STORE&quot; 2&gt;/dev/null \
+    | /usr/bin/base64 -D 2&gt;/dev/null \
+    | /usr/bin/plutil -extract &quot;module.relative&quot; raw - 2&gt;/dev/null \
+    || true
+)&quot;
+
+CURRENT_HAS_GLOBAL_WALLPAPER=&quot;false&quot;
+
+if /usr/bin/plutil -type &quot;AllSpacesAndDisplays.Desktop&quot; &quot;$STORE&quot; &gt;/dev/null 2&gt;&amp;1; then
+    CURRENT_HAS_GLOBAL_WALLPAPER=&quot;true&quot;
+elif /usr/bin/plutil -type &quot;AllSpacesAndDisplays.Linked&quot; &quot;$STORE&quot; &gt;/dev/null 2&gt;&amp;1; then
+    CURRENT_HAS_GLOBAL_WALLPAPER=&quot;true&quot;
+fi
+
+if [ &quot;$CURRENT_MODULE&quot; = &quot;$TARGET_MODULE&quot; ] &amp;&amp; [ &quot;$CURRENT_HAS_GLOBAL_WALLPAPER&quot; = &quot;true&quot; ]; then
+    echo
+    echo &quot;Screen saver is already configured as $TARGET_SAVER.&quot;
+    echo &quot;Show on all Spaces is already configured.&quot;
+    echo &quot;No changes required.&quot;
+    exit 0
+fi
+
+STAMP=&quot;$(/bin/date +%Y%m%d-%H%M%S)&quot;
+BACKUP=&quot;$STORE_DIR/Index.plist.pre-drift-$STAMP.bak&quot;
+WORK=&quot;$STORE_DIR/Index.plist.drift-work&quot;
+TMPDIR=&quot;$(/usr/bin/mktemp -d /tmp/drift-saver.XXXXXX)&quot;
+IDLE=&quot;$TMPDIR/idle.plist&quot;
+
+ORIGINAL_UID=&quot;$(/usr/bin/stat -f &#x27;%u&#x27; &quot;$STORE&quot;)&quot;
+ORIGINAL_GID=&quot;$(/usr/bin/stat -f &#x27;%g&#x27; &quot;$STORE&quot;)&quot;
+ORIGINAL_MODE=&quot;$(/usr/bin/stat -f &#x27;%Lp&#x27; &quot;$STORE&quot;)&quot;
+
+STOPPED_PIDS=&quot;&quot;
+ALL_SPACES_ACTION=&quot;Already configured&quot;
+
+cleanup() {
+    /bin/rm -rf &quot;$TMPDIR&quot;
+    /bin/rm -f &quot;$WORK&quot;
+
+    if [ -n &quot;$STOPPED_PIDS&quot; ]; then
+        for PID in $STOPPED_PIDS; do
+            /bin/kill -CONT &quot;$PID&quot; 2&gt;/dev/null || true
+        done
+    fi
+}
+
+trap cleanup 0
+
+echo &quot;Logged-in user: $CONSOLE_USER&quot;
+echo &quot;Home: $USER_HOME&quot;
+echo &quot;Current store: $STORE&quot;
+
+cp -p &quot;$STORE&quot; &quot;$BACKUP&quot;
+cp -p &quot;$STORE&quot; &quot;$WORK&quot;
+
+normalize_all_spaces() {
+    if /usr/bin/plutil -type &quot;AllSpacesAndDisplays.Desktop&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        ALL_SPACES_ACTION=&quot;Already configured&quot;
+        return
+    fi
+
+    if /usr/bin/plutil -type &quot;AllSpacesAndDisplays.Linked&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        ALL_SPACES_ACTION=&quot;Already configured&quot;
+        return
+    fi
+
+    if ! /usr/bin/plutil -type &quot;SystemDefault&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        echo &quot;ERROR: SystemDefault does not exist.&quot;
+        exit 1
+    fi
+
+    if ! /usr/bin/plutil -type &quot;SystemDefault.Desktop&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1 \
+       &amp;&amp; ! /usr/bin/plutil -type &quot;SystemDefault.Linked&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        echo &quot;ERROR: SystemDefault contains neither Desktop nor Linked wallpaper state.&quot;
+        exit 1
+    fi
+
+    SYSTEM_DEFAULT_XML=&quot;$(/usr/bin/plutil -extract &quot;SystemDefault&quot; xml1 -o - &quot;$WORK&quot;)&quot;
+
+    if /usr/bin/plutil -type &quot;AllSpacesAndDisplays&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        /usr/bin/plutil -replace &quot;AllSpacesAndDisplays&quot; -xml &quot;$SYSTEM_DEFAULT_XML&quot; &quot;$WORK&quot;
+    else
+        /usr/bin/plutil -insert &quot;AllSpacesAndDisplays&quot; -xml &quot;$SYSTEM_DEFAULT_XML&quot; &quot;$WORK&quot;
+    fi
+
+    if /usr/bin/plutil -type &quot;Spaces&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        /usr/bin/plutil -replace &quot;Spaces&quot; -xml &#x27;&lt;dict/&gt;&#x27; &quot;$WORK&quot;
+    else
+        /usr/bin/plutil -insert &quot;Spaces&quot; -xml &#x27;&lt;dict/&gt;&#x27; &quot;$WORK&quot;
+    fi
+
+    if /usr/bin/plutil -type &quot;Displays&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        /usr/bin/plutil -replace &quot;Displays&quot; -xml &#x27;&lt;dict/&gt;&#x27; &quot;$WORK&quot;
+    else
+        /usr/bin/plutil -insert &quot;Displays&quot; -xml &#x27;&lt;dict/&gt;&#x27; &quot;$WORK&quot;
+    fi
+
+    ALL_SPACES_ACTION=&quot;Enabled using SystemDefault wallpaper&quot;
+
+    echo &quot;Show on all Spaces state normalized.&quot;
+}
+
+normalize_all_spaces
+
+NOW=&quot;$(/bin/date -u +&quot;%Y-%m-%dT%H:%M:%SZ&quot;)&quot;
+
+cat &gt; &quot;$IDLE&quot; &lt;&lt;EOF
+&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;!DOCTYPE plist PUBLIC &quot;-//Apple//DTD PLIST 1.0//EN&quot; &quot;http://www.apple.com/DTDs/PropertyList-1.0.dtd&quot;&gt;
+&lt;plist version=&quot;1.0&quot;&gt;
+&lt;dict&gt;
+    &lt;key&gt;Content&lt;/key&gt;
+    &lt;dict&gt;
+        &lt;key&gt;Choices&lt;/key&gt;
+        &lt;array&gt;
+            &lt;dict&gt;
+                &lt;key&gt;Configuration&lt;/key&gt;
+                &lt;data&gt;YnBsaXN0MDDRAQJWbW9kdWxl0QMEWHJlbGF0aXZlXxA6ZmlsZTovLy9TeXN0ZW0vTGlicmFyeS9FeHRlbnNpb25LaXQvRXh0ZW5zaW9ucy9EcmlmdC5hcHBleAgLEhUeAAAAAAAAAQEAAAAAAAAABQAAAAAAAAAAAAAAAAAAAFs=&lt;/data&gt;
+                &lt;key&gt;Files&lt;/key&gt;
+                &lt;array/&gt;
+                &lt;key&gt;Provider&lt;/key&gt;
+                &lt;string&gt;com.apple.wallpaper.choice.screen-saver&lt;/string&gt;
+            &lt;/dict&gt;
+        &lt;/array&gt;
+        &lt;key&gt;EncodedOptionValues&lt;/key&gt;
+        &lt;data&gt;YnBsaXN0MDDRAQJWdmFsdWVz0AgLEgAAAAAAAAEBAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAT&lt;/data&gt;
+        &lt;key&gt;Shuffle&lt;/key&gt;
+        &lt;string&gt;\$null&lt;/string&gt;
+    &lt;/dict&gt;
+    &lt;key&gt;LastSet&lt;/key&gt;
+    &lt;date&gt;$NOW&lt;/date&gt;
+    &lt;key&gt;LastUse&lt;/key&gt;
+    &lt;date&gt;$NOW&lt;/date&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;
+EOF
+
+/usr/bin/plutil -lint &quot;$IDLE&quot; &gt;/dev/null
+
+IDLE_XML=&quot;$(/bin/cat &quot;$IDLE&quot;)&quot;
+
+prepare_scope() {
+    SCOPE=&quot;$1&quot;
+
+    if /usr/bin/plutil -type &quot;$SCOPE.Linked&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        LINKED_XML=&quot;$(/usr/bin/plutil -extract &quot;$SCOPE.Linked&quot; xml1 -o - &quot;$WORK&quot;)&quot;
+
+        if /usr/bin/plutil -type &quot;$SCOPE.Desktop&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+            /usr/bin/plutil -remove &quot;$SCOPE.Desktop&quot; &quot;$WORK&quot;
+        fi
+
+        /usr/bin/plutil -insert &quot;$SCOPE.Desktop&quot; -xml &quot;$LINKED_XML&quot; &quot;$WORK&quot;
+        /usr/bin/plutil -remove &quot;$SCOPE.Linked&quot; &quot;$WORK&quot;
+    fi
+
+    if ! /usr/bin/plutil -type &quot;$SCOPE.Desktop&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        echo &quot;ERROR: Neither Linked nor Desktop exists under $SCOPE.&quot;
+        exit 1
+    fi
+
+    if /usr/bin/plutil -type &quot;$SCOPE.Idle&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        /usr/bin/plutil -remove &quot;$SCOPE.Idle&quot; &quot;$WORK&quot;
+    fi
+
+    /usr/bin/plutil -insert &quot;$SCOPE.Idle&quot; -xml &quot;$IDLE_XML&quot; &quot;$WORK&quot;
+
+    if /usr/bin/plutil -type &quot;$SCOPE.Type&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+        /usr/bin/plutil -replace &quot;$SCOPE.Type&quot; -string &quot;individual&quot; &quot;$WORK&quot;
+    else
+        /usr/bin/plutil -insert &quot;$SCOPE.Type&quot; -string &quot;individual&quot; &quot;$WORK&quot;
+    fi
+}
+
+prepare_scope &quot;AllSpacesAndDisplays&quot;
+prepare_scope &quot;SystemDefault&quot;
+
+/usr/bin/plutil -lint &quot;$WORK&quot; &gt;/dev/null
+
+WORK_MODULE=&quot;$(
+    /usr/bin/plutil -extract \
+        &quot;AllSpacesAndDisplays.Idle.Content.Choices.0.Configuration&quot; \
+        raw &quot;$WORK&quot; \
+    | /usr/bin/base64 -D \
+    | /usr/bin/plutil -extract &quot;module.relative&quot; raw -
+)&quot;
+
+if [ &quot;$WORK_MODULE&quot; != &quot;$TARGET_MODULE&quot; ]; then
+    echo &quot;ERROR: Temporary plist validation failed.&quot;
+    exit 1
+fi
+
+if ! /usr/bin/plutil -type &quot;AllSpacesAndDisplays.Desktop&quot; &quot;$WORK&quot; &gt;/dev/null 2&gt;&amp;1; then
+    echo &quot;ERROR: Global wallpaper normalization validation failed.&quot;
+    exit 1
+fi
+
+echo &quot;Temporary plist validated.&quot;
+
+STOPPED_PIDS=&quot;$(
+    /bin/ps -axo pid=,uid=,comm= \
+    | /usr/bin/awk -v uid=&quot;$USER_UID&quot; \
+        &#x27;$2 == uid &amp;&amp; $3 ~ /WallpaperAgent$/ {print $1}&#x27;
+)&quot;
+
+if [ -n &quot;$STOPPED_PIDS&quot; ]; then
+    for PID in $STOPPED_PIDS; do
+        /bin/kill -STOP &quot;$PID&quot; 2&gt;/dev/null || true
+    done
+fi
+
+/bin/mv -f &quot;$WORK&quot; &quot;$STORE&quot;
+
+/usr/sbin/chown &quot;$ORIGINAL_UID:$ORIGINAL_GID&quot; &quot;$STORE&quot;
+/bin/chmod &quot;$ORIGINAL_MODE&quot; &quot;$STORE&quot;
+
+if [ -n &quot;$STOPPED_PIDS&quot; ]; then
+    for PID in $STOPPED_PIDS; do
+        /bin/kill -KILL &quot;$PID&quot; 2&gt;/dev/null || true
+    done
+fi
+
+STOPPED_PIDS=&quot;&quot;
+
+/bin/sleep 2
+
+LIVE_MODULE=&quot;$(
+    /usr/bin/plutil -extract \
+        &quot;AllSpacesAndDisplays.Idle.Content.Choices.0.Configuration&quot; \
+        raw &quot;$STORE&quot; 2&gt;/dev/null \
+    | /usr/bin/base64 -D 2&gt;/dev/null \
+    | /usr/bin/plutil -extract &quot;module.relative&quot; raw - 2&gt;/dev/null \
+    || true
+)&quot;
+
+LIVE_HAS_DESKTOP=&quot;false&quot;
+
+if /usr/bin/plutil -type &quot;AllSpacesAndDisplays.Desktop&quot; &quot;$STORE&quot; &gt;/dev/null 2&gt;&amp;1; then
+    LIVE_HAS_DESKTOP=&quot;true&quot;
+fi
+
+if [ &quot;$LIVE_MODULE&quot; != &quot;$TARGET_MODULE&quot; ] || [ &quot;$LIVE_HAS_DESKTOP&quot; != &quot;true&quot; ]; then
+    echo &quot;ERROR: WallpaperAgent did not retain the expected configuration.&quot;
+    echo &quot;Restoring backup.&quot;
+
+    cp -p &quot;$BACKUP&quot; &quot;$STORE&quot;
+
+    /usr/sbin/chown &quot;$ORIGINAL_UID:$ORIGINAL_GID&quot; &quot;$STORE&quot;
+    /bin/chmod &quot;$ORIGINAL_MODE&quot; &quot;$STORE&quot;
+
+    CURRENT_AGENT_PIDS=&quot;$(
+        /bin/ps -axo pid=,uid=,comm= \
+        | /usr/bin/awk -v uid=&quot;$USER_UID&quot; \
+            &#x27;$2 == uid &amp;&amp; $3 ~ /WallpaperAgent$/ {print $1}&#x27;
+    )&quot;
+
+    if [ -n &quot;$CURRENT_AGENT_PIDS&quot; ]; then
+        for PID in $CURRENT_AGENT_PIDS; do
+            /bin/kill -KILL &quot;$PID&quot; 2&gt;/dev/null || true
+        done
+    fi
+
+    echo &quot;Original configuration restored.&quot;
+    exit 1
+fi
+
+BACKUP_NUMBER=0
+
+/bin/ls -1t &quot;$STORE_DIR&quot;/Index.plist.pre-drift-*.bak 2&gt;/dev/null \
+| while IFS= read -r OLD_BACKUP; do
+
+    BACKUP_NUMBER=$((BACKUP_NUMBER + 1))
+
+    if [ &quot;$BACKUP_NUMBER&quot; -gt &quot;$KEEP_BACKUPS&quot; ]; then
+        /bin/rm -f &quot;$OLD_BACKUP&quot;
+    fi
+done
+
+echo
+echo &quot;SUCCESS&quot;
+echo &quot;Screen saver: $TARGET_SAVER&quot;
+echo &quot;Module: $LIVE_MODULE&quot;
+echo &quot;Show on all Spaces: $ALL_SPACES_ACTION&quot;
+echo &quot;Wallpaper configuration preserved using the global wallpaper state.&quot;
+echo &quot;Backup: $BACKUP&quot;
+echo &quot;Backup retention: newest $KEEP_BACKUPS retained.&quot;</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>

@@ -1,0 +1,965 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local Device Administrator Setup | TOW macOS Documentation</title><link rel="stylesheet" href="../assets/site.css"></head><body style="--accent:#4FD1C5"><main class="shell"><div class="breadcrumbs"><a href="../index.html">macOS Architecture</a> / <a href="../ninjaone-configuration.html">NinjaOne Configuration</a> / <a href="../ninjaone/scheduled-automations.html">Scheduled Automations</a></div><header class="hero"><div class="eyebrow">AUTOMATION // SCRIPT</div><h1>Local Device Administrator Setup</h1><p class="subtitle">The TOW Foundation · macOS · NinjaOne ShellScript</p></header><nav class="tabs" aria-label="Page views"><button class="tab active" data-view="documentation">Documentation</button><button class="tab" data-view="source1">Raw ZSH</button></nav><section class="view active" id="documentation"><p class="source-note">Explanation content is preserved from the current script explanation document. Raw-source tabs use the current available source files.</p><details open><summary>Script Purpose</summary><div class="section-body"><p>Implements the TOGA local-management-account workflow for managed macOS devices. The script evaluates the current account state, creates or repairs the protected local administrator admin, ensures that account has a confirmed Secure Token, and ultimately leaves the signed-in primary user as a Standard user.</p><p>The workflow is intentionally state-aware. A fully compliant device exits without displaying a user-facing dialog, while remediation occurs only for states that require account creation, privilege repair, Secure Token assignment, or primary-user demotion.</p><p>The script also writes before/after account-state evidence to /Library/Logs/TOGA/AdminWorkflow_AccountStatus.txt and logs workflow events under the tag TOGAAdminWorkflow.</p></div></details><details open><summary>How It Functions</summary><div class="section-body"><p>Requires execution as root. If $EUID is not 0, the script logs an error and exits with status 1.</p><p>Determines the active console user through stat -f &#x27;%Su&#x27; /dev/console. Empty values and the accounts root, loginwindow, _mbsetupuser, and the protected management account admin are rejected as ineligible interactive users.</p><p>Creates a fresh status file at /Library/Logs/TOGA/AdminWorkflow_AccountStatus.txt with root:wheel ownership and mode 644. The surrounding /Library/Logs/TOGA directory is created if necessary with mode 755.</p><p>Writes a START — BEFORE ANY ACCOUNT OR PRIVILEGE CHANGES snapshot before remediation. The snapshot enumerates local accounts with numeric UID 501 or greater and records each account&#x27;s UID, Administrator/Standard state, and Secure Token state.</p><p>Determines administrator membership with dseditgroup -o checkmember and determines Secure Token state by parsing sysadminctl -secureTokenStatus for the literal results ENABLED, DISABLED, or UNKNOWN.</p><p>Prepares user-facing AppleScript helpers that execute in the signed-in user&#x27;s GUI session via launchctl asuser and sudo -u. Dialogs use the title Local Device Admin Setup and attempt to display /Users/Shared/Tow Foundation/FinderguySecurityPose1024.png as the custom icon.</p><p>Recursively adjusts permissions on /Users/Shared/Tow Foundation when that directory exists. It applies chmod -R 755 and adds an inherited ACL granting everyone read and execute access so the shared prompt resources can be read from the user&#x27;s session.</p><p>Evaluates the current steady state before changing anything. The desired result is: admin exists, admin is enabled, admin is an Administrator, admin has Secure Token ENABLED, and the signed-in primary user is Standard.</p><p>If every steady-state check already passes, appends RESULT: NO CHANGES REQUIRED to the status file, sets the workflow complete flag, and exits with status 0 without presenting any AppleScript dialog.</p><p>If the management account is missing, creates admin with sysadminctl -addUser, assigns the Administrator role, and verifies that the local account now exists. The configured management password is supplied from the script&#x27;s MANAGEMENT_ADMIN_PASSWORD variable; its actual value is intentionally omitted from this documentation.</p><p>Treats a disabled or unreadable management account as a hard stop. If admin exists but is only Standard, the script adds it to the admin group with dseditgroup and immediately verifies the resulting Administrator state.</p><p>Attempts to hide admin from the macOS login window by appending it to /Library/Preferences/com.apple.loginwindow HiddenUsersList. Failure to hide the account is logged as a warning rather than treated as a fatal workflow error.</p><p>Queries the management account&#x27;s Secure Token state. ENABLED skips the entire password/token-grant workflow; DISABLED enters the grant workflow; UNKNOWN stops the script rather than guessing or proceeding to demotion.</p><p>When a Secure Token grant is required, verifies that the signed-in primary user already has Secure Token ENABLED. A user without a confirmed token cannot authorize the management account, so the script displays an error and exits.</p><p>If the token-authorizing user is currently Standard, temporarily adds that user to the admin group. The flag TEMPORARILY_PROMOTED=1 activates cleanup logic that attempts to restore Standard membership if the workflow later fails, is cancelled, or receives HUP, INT, or TERM.</p><p>Prompts for the signed-in user&#x27;s current password only when a Secure Token grant is actually required. The password is entered through an AppleScript dialog with hidden answer and is accepted for validation only after dscl . -authonly successfully authenticates it.</p><p>Allows up to 3 password attempts, controlled by MAX_PASSWORD_ATTEMPTS. Cancellation, GUI failure, or repeated invalid credentials stop the token workflow rather than proceeding with an unverified credential.</p><p>Validates the configured management-account password with dscl . -authonly before using it in the token grant. The script then calls sysadminctl -adminUser ... -secureTokenOn admin using the signed-in token-bearing user as the authorizing account.</p><p>Does not trust the sysadminctl exit code alone. After the grant command, it clears the in-memory password variables and independently re-runs sysadminctl -secureTokenStatus admin. Only a parsed ENABLED result is accepted as success.</p><p>After a successful token grant, appends a POST-TOKEN — TOKEN GRANT VERIFIED, BEFORE USER DEMOTION snapshot so the account state immediately before demotion is preserved.</p><p>Determines whether the primary user still needs demotion. A user already in the Standard state is left alone; an Administrator enters a separate pre-demotion validation sequence.</p><p>Immediately before demotion, independently revalidates four conditions for admin: the account still exists, is enabled, is an Administrator, and a fresh raw sysadminctl -secureTokenStatus response explicitly reports Secure token is ENABLED. Any failure blocks the demotion.</p><p>Removes the signed-in primary user from the admin group only after all pre-demotion checks pass. The literal management account admin is explicitly protected from ever becoming the demotion target.</p><p>Verifies that the primary user now resolves as Standard. A successful remediation then appends FINAL — AFTER ALL REQUIRED REMEDIATION plus RESULT: REMEDIATION COMPLETE to the status file.</p><p>Intentionally shows no success dialog. Healthy repeat runs and successful remediation complete silently, while user-facing dialogs are reserved for password collection and blocking/error conditions.</p></div></details><details><summary>Why This Script Is Deployed</summary><div class="section-body"><p>The script establishes a predictable separation between the end user&#x27;s daily account and a dedicated local management administrator. It is designed to leave the primary user as Standard while retaining an independently validated local Administrator account with Secure Token enabled.</p><p>The additional validation layers are specifically intended to prevent the script from removing the user&#x27;s administrator membership unless admin is demonstrably available as an enabled, administrative, token-bearing recovery/management account.</p><p>The before, post-token, and final snapshots also create a local audit record showing the account and Secure Token state surrounding each remediation run without recording the user&#x27;s entered password.</p></div></details><details><summary>Safety And Failure Behavior</summary><div class="section-body"><p>Exit 1 — script was not executed as root.  Exit 2 — no eligible console user, protected management account is signed in, or the console UID could not be resolved.</p><p>Exit 30–33 — management-account creation/role/state or Secure Token evaluation failed.  Exit 40–41 — the authorizing user lacks a confirmed token or temporary promotion failed.</p><p>Exit 50–53 — password UI, credential verification, management credential verification, or Secure Token grant/verification failed.  Exit 60–66 — one of the independent pre-demotion checks or the demotion itself failed.</p><p>Exit 20 — the workflow received one of the trapped termination signals. The EXIT trap still runs and attempts to restore a temporarily promoted user before process termination completes.</p></div></details><details><summary>Dependencies And Deployment Notes</summary><div class="section-body"><div class="callout danger">IMPORTANT SECURITY CAVEAT  The script contains the local management account password as a plaintext shell variable named MANAGEMENT_ADMIN_PASSWORD. The secret is intentionally not reproduced in this explanation document. Access to the source script, its deployment platform, and any exported automation containing it should therefore be restricted as sensitive administrative material.</div><div class="callout danger">IMPORTANT SECURITY CAVEAT  The management and user passwords are passed to commands as command-line arguments during account creation, credential validation, and Secure Token assignment. The script clears USER_PASSWORD and ADMIN_PASSWORD after use, but this does not convert the underlying workflow into a secret-management system.</div><div class="callout warning">OPERATIONAL NOTE  The script checks password validity for admin only when a new Secure Token grant is required. If admin already exists with Secure Token enabled, the steady-state check does not verify that its current password still matches MANAGEMENT_ADMIN_PASSWORD.</div><div class="callout warning">OPERATIONAL NOTE  Login-window hiding is not part of the script&#x27;s steady-state compliance test. If the device is otherwise fully compliant, the silent no-change exit occurs before the HiddenUsersList remediation block. Therefore an otherwise healthy device can remain compliant according to this script even if admin is not currently hidden.</div><div class="callout warning">OPERATIONAL WARNING  The resource-permission preparation applies chmod -R 755 plus an inherited read/execute ACL to the entire /Users/Shared/Tow Foundation tree, not only the Finder Guy security image. Any other files placed in that shared directory inherit the operational consequences of this broad permission change.</div><p>IMPORTANT BEHAVIORAL CAVEAT  Some failure dialogs state that No changes were made, but a failure can occur after earlier remediation already created or promoted admin, modified HiddenUsersList, or temporarily changed the primary user&#x27;s admin membership. The cleanup trap restores only a user that this run temporarily promoted; other successful earlier remediation steps are not rolled back.</p><p>The user-facing GUI depends on an active macOS graphical session capable of running AppleScript through osascript. The custom icon depends on /Users/Shared/Tow Foundation/FinderguySecurityPose1024.png; the dialogs fall back to standard macOS icons if the custom icon cannot be used.</p><p>Secure Token decisions are intentionally based on the text returned by sysadminctl -secureTokenStatus. If that command returns an unexpected result, the script treats the state as UNKNOWN and blocks destructive privilege changes rather than inferring success.</p><p>The status file contains account names, UIDs, local privilege state, Secure Token state, timestamps, and workflow results, but the script does not intentionally write the entered passwords into that file.</p><p class="callout success"><strong>Happy Scripting!</strong></p></div></details></section><section class="view" id="source1"><div class="callout warning"><strong>Security sanitization:</strong> sensitive credential material is intentionally redacted in this rendered/downloadable documentation copy.</div><div class="code-card"><div class="code-head"><div><div class="code-title">Raw ZSH</div><div class="code-file">Local_Device_Administrator_Setup.zsh</div><div class="code-lang">ZSH</div></div><div class="actions"><button class="action" data-copy-target="code-source1">Copy source</button><button class="action" data-download-target="code-source1" data-filename="Local_Device_Administrator_Setup.zsh" data-mime="text/x-shellscript;charset=utf-8">Download file</button></div></div><pre><code id="code-source1">#!/bin/bash
+
+# ==============================================================================
+# TOGA Unified Local Admin + Secure Token + User Demotion Workflow
+#
+# PURPOSE
+#   1. Record local account privilege + Secure Token state BEFORE changing anything.
+#   2. Create the local management administrator &quot;admin&quot; if it does not exist.
+#   3. If &quot;admin&quot; lacks a Secure Token:
+#        - temporarily promote the console user if necessary,
+#        - prompt that user for their password,
+#        - grant &quot;admin&quot; a Secure Token,
+#        - verify the grant.
+#   4. Verify &quot;admin&quot; is present, enabled, an administrator, and token-enabled.
+#   5. Demote the console user to Standard.
+#   6. Record post-token and final account-state snapshots.
+#
+# NOTES
+#   - The literal account &quot;admin&quot; is NEVER a demotion target.
+#   - This script intentionally avoids logical &quot;if !&quot; negation syntax.
+#   - Secure Token state is always verified from sysadminctl output.
+#   - The status file contains no passwords.
+#
+# RUN AS
+#   root / System
+# ==============================================================================
+
+
+# ==============================================================================
+# SECTION 0 — CONFIGURATION
+# ==============================================================================
+
+PATH=&quot;/usr/bin:/bin:/usr/sbin:/sbin&quot;
+
+MANAGEMENT_ADMIN=&quot;admin&quot;
+MANAGEMENT_ADMIN_PASSWORD=&quot;&lt;REDACTED&gt;&quot;
+
+WINDOW_TITLE=&quot;Local Device Admin Setup&quot;
+SECURITY_ICON=&quot;/Users/Shared/Tow Foundation/FinderguySecurityPose1024.png&quot;
+MAX_PASSWORD_ATTEMPTS=3
+
+STATUS_DIRECTORY=&quot;/Library/Logs/TOGA&quot;
+STATUS_FILE=&quot;$STATUS_DIRECTORY/AdminWorkflow_AccountStatus.txt&quot;
+
+USER_PASSWORD=&quot;&quot;
+ADMIN_PASSWORD=&quot;&quot;
+TEMPORARILY_PROMOTED=0
+WORKFLOW_COMPLETE=0
+CHANGES_MADE=0
+TOKEN_WAS_GRANTED=0
+
+
+# ==============================================================================
+# SECTION 1 — BASIC LOGGING AND ROOT CHECK
+# ==============================================================================
+
+log() {
+    /usr/bin/logger -t &quot;TOGAAdminWorkflow&quot; -- &quot;$1&quot;
+    printf &#x27;%s\n&#x27; &quot;[TOGAAdminWorkflow] $1&quot;
+}
+
+if [[ &quot;$EUID&quot; -ne 0 ]]; then
+    log &quot;ERROR: This script must run as root.&quot;
+    exit 1
+fi
+
+CONSOLE_USER=&quot;$(/usr/bin/stat -f &#x27;%Su&#x27; /dev/console 2&gt;/dev/null)&quot;
+
+case &quot;$CONSOLE_USER&quot; in
+    &quot;&quot;|root|loginwindow|_mbsetupuser)
+        log &quot;ERROR: No eligible user is currently signed in.&quot;
+        exit 2
+        ;;
+
+    &quot;$MANAGEMENT_ADMIN&quot;)
+        log &quot;BLOCKED: The signed-in user is the protected management account &#x27;$MANAGEMENT_ADMIN&#x27;.&quot;
+        exit 2
+        ;;
+esac
+
+CONSOLE_UID=&quot;$(/usr/bin/id -u &quot;$CONSOLE_USER&quot; 2&gt;/dev/null)&quot;
+
+if [[ -z &quot;$CONSOLE_UID&quot; ]]; then
+    log &quot;ERROR: Could not determine the signed-in user&#x27;s UID.&quot;
+    exit 2
+fi
+
+log &quot;Signed-in user: &#x27;$CONSOLE_USER&#x27;&quot;
+log &quot;Signed-in user UID: &#x27;$CONSOLE_UID&#x27;&quot;
+
+
+# ==============================================================================
+# SECTION 2 — ACCOUNT-STATE SNAPSHOT FUNCTIONS
+#
+# Each snapshot records:
+#   - timestamp
+#   - console user
+#   - each local account with UID &gt;= 501
+#   - Administrator vs Standard membership
+#   - Secure Token ENABLED / DISABLED / UNKNOWN
+#
+# The START snapshot is written before account creation, promotion, token changes,
+# or demotion.
+# ==============================================================================
+
+account_exists() {
+    /usr/bin/dscl . -read &quot;/Users/$1&quot; UniqueID &gt;/dev/null 2&gt;&amp;1
+    return $?
+}
+
+get_admin_state() {
+    local username=&quot;$1&quot;
+    local result
+
+    result=$(/usr/sbin/dseditgroup -o checkmember -m &quot;$username&quot; admin 2&gt;/dev/null)
+
+    case &quot;$result&quot; in
+        yes*)
+            printf &#x27;%s&#x27; &quot;Administrator&quot;
+            ;;
+        *)
+            printf &#x27;%s&#x27; &quot;Standard&quot;
+            ;;
+    esac
+}
+
+get_token_state() {
+    local username=&quot;$1&quot;
+    local result
+
+    result=$(/usr/sbin/sysadminctl -secureTokenStatus &quot;$username&quot; 2&gt;&amp;1)
+
+    case &quot;$result&quot; in
+        *&quot;Secure token is ENABLED&quot;*)
+            printf &#x27;%s&#x27; &quot;ENABLED&quot;
+            ;;
+        *&quot;Secure token is DISABLED&quot;*)
+            printf &#x27;%s&#x27; &quot;DISABLED&quot;
+            ;;
+        *)
+            printf &#x27;%s&#x27; &quot;UNKNOWN&quot;
+            ;;
+    esac
+}
+
+write_snapshot() {
+    local label=&quot;$1&quot;
+    local timestamp
+    local username
+    local uid
+    local permission_state
+    local token_state
+    local admin_found=0
+
+    timestamp=$(/bin/date &#x27;+%Y-%m-%d %H:%M:%S %Z&#x27;)
+
+    {
+        printf &#x27;%s\n&#x27; &quot;============================================================&quot;
+        printf &#x27;%s\n&#x27; &quot;ACCOUNT STATUS SNAPSHOT: $label&quot;
+        printf &#x27;%s\n&#x27; &quot;Written: $timestamp&quot;
+        printf &#x27;%s\n&#x27; &quot;Console User: $CONSOLE_USER&quot;
+        printf &#x27;%s\n&#x27; &quot;============================================================&quot;
+        printf &#x27;\n&#x27;
+
+        /usr/bin/dscl . -list /Users UniqueID 2&gt;/dev/null |
+        /usr/bin/awk &#x27;$2 ~ /^[0-9]+$/ &amp;&amp; $2 &gt;= 501 { print $1, $2 }&#x27; |
+        while read -r username uid; do
+            permission_state=&quot;$(get_admin_state &quot;$username&quot;)&quot;
+            token_state=&quot;$(get_token_state &quot;$username&quot;)&quot;
+
+            printf &#x27;%s\n&#x27; &quot;User: $username&quot;
+            printf &#x27;%s\n&#x27; &quot;UID: $uid&quot;
+            printf &#x27;%s\n&#x27; &quot;Permissions: $permission_state&quot;
+            printf &#x27;%s\n&#x27; &quot;Secure Token: $token_state&quot;
+            printf &#x27;\n&#x27;
+        done
+
+        account_exists &quot;$MANAGEMENT_ADMIN&quot;
+        admin_exists_result=$?
+
+        if [[ &quot;$admin_exists_result&quot; -ne 0 ]]; then
+            printf &#x27;%s\n&#x27; &quot;User: $MANAGEMENT_ADMIN&quot;
+            printf &#x27;%s\n&#x27; &quot;Status: NOT PRESENT&quot;
+            printf &#x27;\n&#x27;
+        fi
+
+        printf &#x27;%s\n&#x27; &quot;============================================================&quot;
+        printf &#x27;\n&#x27;
+    } &gt;&gt; &quot;$STATUS_FILE&quot;
+}
+
+
+/bin/mkdir -p &quot;$STATUS_DIRECTORY&quot;
+/usr/sbin/chown root:wheel &quot;$STATUS_DIRECTORY&quot;
+/bin/chmod 755 &quot;$STATUS_DIRECTORY&quot;
+
+# Start a fresh record for this execution.
+: &gt; &quot;$STATUS_FILE&quot;
+/usr/sbin/chown root:wheel &quot;$STATUS_FILE&quot;
+/bin/chmod 644 &quot;$STATUS_FILE&quot;
+
+write_snapshot &quot;START — BEFORE ANY ACCOUNT OR PRIVILEGE CHANGES&quot;
+
+log &quot;START account snapshot written to:&quot;
+log &quot;$STATUS_FILE&quot;
+log &quot;----- BEGIN START SNAPSHOT -----&quot;
+/bin/cat &quot;$STATUS_FILE&quot;
+log &quot;----- END START SNAPSHOT -----&quot;
+
+
+# ==============================================================================
+# SECTION 3 — UI HELPERS
+# ==============================================================================
+
+if [[ -d &quot;/Users/Shared/Tow Foundation&quot; ]]; then
+    /bin/chmod -R 755 &quot;/Users/Shared/Tow Foundation&quot; 2&gt;/dev/null
+    /bin/chmod -R +a &quot;everyone allow read,execute,file_inherit,directory_inherit&quot; \
+        &quot;/Users/Shared/Tow Foundation&quot; 2&gt;/dev/null
+fi
+
+run_user_osascript() {
+    /bin/launchctl asuser &quot;$CONSOLE_UID&quot; \
+        /usr/bin/sudo -u &quot;$CONSOLE_USER&quot; \
+        /usr/bin/osascript - &quot;$@&quot;
+}
+
+show_info() {
+    run_user_osascript &quot;$WINDOW_TITLE&quot; &quot;$1&quot; &quot;$SECURITY_ICON&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27; &gt;/dev/null 2&gt;&amp;1
+on run argv
+    try
+        display dialog (item 2 of argv) buttons {&quot;OK&quot;} default button &quot;OK&quot; with title (item 1 of argv) with icon (POSIX file (item 3 of argv))
+    on error
+        display dialog (item 2 of argv) buttons {&quot;OK&quot;} default button &quot;OK&quot; with title (item 1 of argv) with icon note
+    end try
+end run
+APPLESCRIPT
+}
+
+show_error() {
+    run_user_osascript &quot;$WINDOW_TITLE&quot; &quot;$1&quot; &quot;$SECURITY_ICON&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27; &gt;/dev/null 2&gt;&amp;1
+on run argv
+    try
+        display dialog (item 2 of argv) buttons {&quot;OK&quot;} default button &quot;OK&quot; with title (item 1 of argv) with icon (POSIX file (item 3 of argv))
+    on error
+        display dialog (item 2 of argv) buttons {&quot;OK&quot;} default button &quot;OK&quot; with title (item 1 of argv) with icon stop
+    end try
+end run
+APPLESCRIPT
+}
+
+prompt_for_password() {
+    run_user_osascript &quot;$WINDOW_TITLE&quot; &quot;$1&quot; &quot;$SECURITY_ICON&quot; &lt;&lt;&#x27;APPLESCRIPT&#x27;
+on run argv
+    try
+        set dialogResult to display dialog (item 2 of argv) default answer &quot;&quot; with hidden answer buttons {&quot;Cancel&quot;, &quot;Continue&quot;} default button &quot;Continue&quot; cancel button &quot;Cancel&quot; with title (item 1 of argv) with icon (POSIX file (item 3 of argv))
+    on error errorMessage number errorNumber
+        if errorNumber is -128 then
+            return &quot;__SECURE_TOKEN_GUI_CANCELLED__&quot;
+        end if
+
+        try
+            set dialogResult to display dialog (item 2 of argv) default answer &quot;&quot; with hidden answer buttons {&quot;Cancel&quot;, &quot;Continue&quot;} default button &quot;Continue&quot; cancel button &quot;Cancel&quot; with title (item 1 of argv) with icon caution
+        on error fallbackMessage number fallbackNumber
+            if fallbackNumber is -128 then
+                return &quot;__SECURE_TOKEN_GUI_CANCELLED__&quot;
+            end if
+            return &quot;__SECURE_TOKEN_GUI_ERROR__&quot; &amp; fallbackNumber &amp; &quot;: &quot; &amp; fallbackMessage
+        end try
+    end try
+
+    return &quot;__SECURE_TOKEN_GUI_PASSWORD__&quot; &amp; (text returned of dialogResult)
+end run
+APPLESCRIPT
+}
+
+
+# ==============================================================================
+# SECTION 4 — PASSWORD AND ACCOUNT HELPERS
+# ==============================================================================
+
+password_is_valid() {
+    /usr/bin/dscl . -authonly &quot;$1&quot; &quot;$2&quot; &gt;/dev/null 2&gt;&amp;1
+    return $?
+}
+
+management_admin_is_enabled() {
+    local authority
+    local authority_result
+
+    authority=$(/usr/bin/dscl . -read &quot;/Users/$MANAGEMENT_ADMIN&quot; AuthenticationAuthority 2&gt;/dev/null)
+    authority_result=$?
+
+    if [[ &quot;$authority_result&quot; -ne 0 ]]; then
+        return 1
+    fi
+
+    case &quot;$authority&quot; in
+        *&quot;;DisabledUser;&quot;*)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+
+# ==============================================================================
+# SECTION 5 — CLEANUP / TEMPORARY-PROMOTION SAFETY
+#
+# If this workflow temporarily promoted a user who started as Standard, ordinary
+# failures, cancellation, HUP, INT, or TERM will attempt to restore Standard
+# membership before the script exits.
+# ==============================================================================
+
+cleanup_sensitive_values() {
+    USER_PASSWORD=&quot;&quot;
+    ADMIN_PASSWORD=&quot;&quot;
+    unset USER_PASSWORD ADMIN_PASSWORD
+}
+
+restore_temporary_standard_membership() {
+    if [[ &quot;$TEMPORARILY_PROMOTED&quot; -eq 1 ]]; then
+        log &quot;CLEANUP: &#x27;$CONSOLE_USER&#x27; was temporarily promoted. Restoring Standard membership.&quot;
+
+        /usr/sbin/dseditgroup -o edit -d &quot;$CONSOLE_USER&quot; -t user admin
+        cleanup_demote_result=$?
+
+        if [[ &quot;$cleanup_demote_result&quot; -eq 0 ]]; then
+            final_cleanup_state=&quot;$(get_admin_state &quot;$CONSOLE_USER&quot;)&quot;
+
+            case &quot;$final_cleanup_state&quot; in
+                Standard)
+                    log &quot;CLEANUP SUCCESS: &#x27;$CONSOLE_USER&#x27; is Standard again.&quot;
+                    TEMPORARILY_PROMOTED=0
+                    ;;
+                *)
+                    log &quot;CLEANUP ERROR: &#x27;$CONSOLE_USER&#x27; still appears to be an administrator.&quot;
+                    ;;
+            esac
+        else
+            log &quot;CLEANUP ERROR: Failed to restore &#x27;$CONSOLE_USER&#x27; to Standard.&quot;
+        fi
+    fi
+}
+
+on_exit() {
+    cleanup_sensitive_values
+
+    if [[ &quot;$WORKFLOW_COMPLETE&quot; -eq 0 ]]; then
+        restore_temporary_standard_membership
+    fi
+}
+
+on_signal() {
+    log &quot;INTERRUPTED: Workflow received a termination signal.&quot;
+    exit 20
+}
+
+trap on_exit EXIT
+trap on_signal HUP INT TERM
+
+
+# ==============================================================================
+# SECTION 6 — EVALUATE CURRENT STATE BEFORE MAKING CHANGES
+#
+# Desired steady state:
+#
+#   Management account &quot;admin&quot;:
+#       - exists
+#       - is enabled
+#       - is an Administrator
+#       - has Secure Token ENABLED
+#
+#   Primary console user:
+#       - if &quot;admin&quot; has Secure Token ENABLED -&gt; should be Standard
+#       - if &quot;admin&quot; does NOT have a Secure Token -&gt; must be Administrator
+#         before the token-grant workflow can run
+#
+# If the complete steady state is already correct, the script exits silently.
+# No AppleScript dialog is shown.
+# ==============================================================================
+
+account_exists &quot;$MANAGEMENT_ADMIN&quot;
+INITIAL_ADMIN_EXISTS_RESULT=$?
+
+if [[ &quot;$INITIAL_ADMIN_EXISTS_RESULT&quot; -eq 0 ]]; then
+    INITIAL_ADMIN_EXISTS=&quot;YES&quot;
+
+    management_admin_is_enabled
+    INITIAL_ADMIN_ENABLED_RESULT=$?
+
+    if [[ &quot;$INITIAL_ADMIN_ENABLED_RESULT&quot; -eq 0 ]]; then
+        INITIAL_ADMIN_ENABLED=&quot;YES&quot;
+    else
+        INITIAL_ADMIN_ENABLED=&quot;NO&quot;
+    fi
+
+    INITIAL_ADMIN_PERMISSION=&quot;$(get_admin_state &quot;$MANAGEMENT_ADMIN&quot;)&quot;
+    INITIAL_ADMIN_TOKEN=&quot;$(get_token_state &quot;$MANAGEMENT_ADMIN&quot;)&quot;
+else
+    INITIAL_ADMIN_EXISTS=&quot;NO&quot;
+    INITIAL_ADMIN_ENABLED=&quot;N/A&quot;
+    INITIAL_ADMIN_PERMISSION=&quot;NOT PRESENT&quot;
+    INITIAL_ADMIN_TOKEN=&quot;NOT PRESENT&quot;
+fi
+
+INITIAL_CONSOLE_PERMISSION=&quot;$(get_admin_state &quot;$CONSOLE_USER&quot;)&quot;
+INITIAL_CONSOLE_TOKEN=&quot;$(get_token_state &quot;$CONSOLE_USER&quot;)&quot;
+
+log &quot;CURRENT STATE EVALUATION:&quot;
+log &quot;  Management account exists: $INITIAL_ADMIN_EXISTS&quot;
+log &quot;  Management account enabled: $INITIAL_ADMIN_ENABLED&quot;
+log &quot;  Management permissions: $INITIAL_ADMIN_PERMISSION&quot;
+log &quot;  Management Secure Token: $INITIAL_ADMIN_TOKEN&quot;
+log &quot;  Primary user permissions: $INITIAL_CONSOLE_PERMISSION&quot;
+log &quot;  Primary user Secure Token: $INITIAL_CONSOLE_TOKEN&quot;
+
+
+# ==============================================================================
+# SECTION 7 — SILENT NO-CHANGE EXIT WHEN EVERYTHING IS ALREADY CORRECT
+# ==============================================================================
+
+STEADY_STATE_CORRECT=1
+
+if [[ &quot;$INITIAL_ADMIN_EXISTS&quot; != &quot;YES&quot; ]]; then
+    STEADY_STATE_CORRECT=0
+fi
+
+if [[ &quot;$INITIAL_ADMIN_ENABLED&quot; != &quot;YES&quot; ]]; then
+    STEADY_STATE_CORRECT=0
+fi
+
+if [[ &quot;$INITIAL_ADMIN_PERMISSION&quot; != &quot;Administrator&quot; ]]; then
+    STEADY_STATE_CORRECT=0
+fi
+
+if [[ &quot;$INITIAL_ADMIN_TOKEN&quot; != &quot;ENABLED&quot; ]]; then
+    STEADY_STATE_CORRECT=0
+fi
+
+if [[ &quot;$INITIAL_CONSOLE_PERMISSION&quot; != &quot;Standard&quot; ]]; then
+    STEADY_STATE_CORRECT=0
+fi
+
+if [[ &quot;$STEADY_STATE_CORRECT&quot; -eq 1 ]]; then
+    {
+        printf &#x27;%s\n&#x27; &quot;RESULT: NO CHANGES REQUIRED&quot;
+        printf &#x27;%s\n&#x27; &quot;Checked: $(/bin/date &#x27;+%Y-%m-%d %H:%M:%S %Z&#x27;)&quot;
+        printf &#x27;%s\n&#x27; &quot;The management account and primary user are already in the desired state.&quot;
+        printf &#x27;\n&#x27;
+    } &gt;&gt; &quot;$STATUS_FILE&quot;
+
+    log &quot;NO CHANGES REQUIRED: Device is already in the desired state.&quot;
+    log &quot;No user-facing prompt will be displayed.&quot;
+
+    WORKFLOW_COMPLETE=1
+    exit 0
+fi
+
+log &quot;One or more required states need remediation.&quot;
+
+
+# ==============================================================================
+# SECTION 8 — CREATE THE MANAGEMENT ACCOUNT ONLY IF IT IS MISSING
+# ==============================================================================
+
+account_exists &quot;$MANAGEMENT_ADMIN&quot;
+MANAGEMENT_ACCOUNT_EXISTS_RESULT=$?
+
+if [[ &quot;$MANAGEMENT_ACCOUNT_EXISTS_RESULT&quot; -eq 0 ]]; then
+    log &quot;NO CHANGE: Management account &#x27;$MANAGEMENT_ADMIN&#x27; already exists.&quot;
+else
+    log &quot;CHANGE REQUIRED: Creating management administrator &#x27;$MANAGEMENT_ADMIN&#x27;.&quot;
+
+    /usr/sbin/sysadminctl \
+        -addUser &quot;$MANAGEMENT_ADMIN&quot; \
+        -fullName &quot;$MANAGEMENT_ADMIN&quot; \
+        -password &quot;$MANAGEMENT_ADMIN_PASSWORD&quot; \
+        -admin &gt;/dev/null 2&gt;&amp;1
+
+    CREATE_RESULT=$?
+
+    account_exists &quot;$MANAGEMENT_ADMIN&quot;
+    CREATE_VERIFY_RESULT=$?
+
+    if [[ &quot;$CREATE_VERIFY_RESULT&quot; -ne 0 ]]; then
+        log &quot;ERROR: &#x27;$MANAGEMENT_ADMIN&#x27; does not exist after the creation attempt.&quot;
+        exit 30
+    fi
+
+    if [[ &quot;$CREATE_RESULT&quot; -ne 0 ]]; then
+        log &quot;WARNING: sysadminctl returned exit code $CREATE_RESULT, but account creation verified successfully.&quot;
+    fi
+
+    CHANGES_MADE=1
+    log &quot;SUCCESS: Management account &#x27;$MANAGEMENT_ADMIN&#x27; was created.&quot;
+fi
+
+
+# ==============================================================================
+# SECTION 9 — VERIFY MANAGEMENT ACCOUNT IS ENABLED AND HAS ADMIN ROLE
+#
+# A disabled account is treated as a hard stop.
+# A present Standard account is safely remediated by adding it to the admin group.
+# ==============================================================================
+
+management_admin_is_enabled
+MANAGEMENT_ENABLED_RESULT=$?
+
+if [[ &quot;$MANAGEMENT_ENABLED_RESULT&quot; -ne 0 ]]; then
+    log &quot;BLOCKED: Management account &#x27;$MANAGEMENT_ADMIN&#x27; is disabled or could not be read.&quot;
+    exit 31
+fi
+
+log &quot;PASS: Management account &#x27;$MANAGEMENT_ADMIN&#x27; is enabled.&quot;
+
+MANAGEMENT_PERMISSION_STATE=&quot;$(get_admin_state &quot;$MANAGEMENT_ADMIN&quot;)&quot;
+
+case &quot;$MANAGEMENT_PERMISSION_STATE&quot; in
+    Administrator)
+        log &quot;NO CHANGE: &#x27;$MANAGEMENT_ADMIN&#x27; already has the Administrator role.&quot;
+        ;;
+
+    Standard)
+        log &quot;CHANGE REQUIRED: &#x27;$MANAGEMENT_ADMIN&#x27; is Standard. Adding Administrator role.&quot;
+
+        /usr/sbin/dseditgroup -o edit -a &quot;$MANAGEMENT_ADMIN&quot; -t user admin
+        MANAGEMENT_PROMOTE_RESULT=$?
+
+        if [[ &quot;$MANAGEMENT_PROMOTE_RESULT&quot; -ne 0 ]]; then
+            log &quot;ERROR: Failed to add &#x27;$MANAGEMENT_ADMIN&#x27; to the admin group.&quot;
+            exit 32
+        fi
+
+        MANAGEMENT_PERMISSION_STATE=&quot;$(get_admin_state &quot;$MANAGEMENT_ADMIN&quot;)&quot;
+
+        case &quot;$MANAGEMENT_PERMISSION_STATE&quot; in
+            Administrator)
+                CHANGES_MADE=1
+                log &quot;SUCCESS: &#x27;$MANAGEMENT_ADMIN&#x27; now has the Administrator role.&quot;
+                ;;
+            *)
+                log &quot;ERROR: Administrator-role verification failed for &#x27;$MANAGEMENT_ADMIN&#x27;.&quot;
+                exit 32
+                ;;
+        esac
+        ;;
+esac
+
+
+# Hide the management account from the login window when remediation is already
+# occurring. This is not a reason by itself to display any user-facing prompt.
+CURRENT_HIDDEN_USERS=$(
+    /usr/bin/defaults read /Library/Preferences/com.apple.loginwindow HiddenUsersList 2&gt;/dev/null
+)
+
+case &quot;$CURRENT_HIDDEN_USERS&quot; in
+    *&quot;$MANAGEMENT_ADMIN&quot;*)
+        log &quot;NO CHANGE: &#x27;$MANAGEMENT_ADMIN&#x27; is already hidden from the login window.&quot;
+        ;;
+    *)
+        /usr/bin/defaults write /Library/Preferences/com.apple.loginwindow \
+            HiddenUsersList -array-add &quot;$MANAGEMENT_ADMIN&quot; 2&gt;/dev/null
+
+        HIDE_RESULT=$?
+
+        if [[ &quot;$HIDE_RESULT&quot; -eq 0 ]]; then
+            CHANGES_MADE=1
+            log &quot;SUCCESS: &#x27;$MANAGEMENT_ADMIN&#x27; is now hidden from the login window.&quot;
+        else
+            log &quot;WARNING: Could not hide &#x27;$MANAGEMENT_ADMIN&#x27; from the login window.&quot;
+        fi
+        ;;
+esac
+
+
+# ==============================================================================
+# SECTION 10 — DETERMINE WHETHER A SECURE TOKEN GRANT IS ACTUALLY NEEDED
+#
+# This is the branch that controls whether the password UI can ever appear.
+#
+#   ENABLED  -&gt; skip the entire password/token-grant workflow
+#   DISABLED -&gt; prepare the primary user and prompt for their password
+#   UNKNOWN  -&gt; stop rather than guessing
+# ==============================================================================
+
+MANAGEMENT_TOKEN_STATE=&quot;$(get_token_state &quot;$MANAGEMENT_ADMIN&quot;)&quot;
+
+case &quot;$MANAGEMENT_TOKEN_STATE&quot; in
+    ENABLED)
+        NEED_TOKEN_GRANT=0
+        log &quot;NO CHANGE: &#x27;$MANAGEMENT_ADMIN&#x27; already has Secure Token ENABLED.&quot;
+        log &quot;Password prompt is not required and will be skipped.&quot;
+        ;;
+
+    DISABLED)
+        NEED_TOKEN_GRANT=1
+        log &quot;CHANGE REQUIRED: &#x27;$MANAGEMENT_ADMIN&#x27; has Secure Token DISABLED.&quot;
+        ;;
+
+    *)
+        log &quot;BLOCKED: Secure Token state for &#x27;$MANAGEMENT_ADMIN&#x27; is UNKNOWN.&quot;
+        log &quot;The script will not guess and will not demote the primary user.&quot;
+        exit 33
+        ;;
+esac
+
+
+# ==============================================================================
+# SECTION 11 — IF TOKEN IS MISSING, PREPARE THE PRIMARY USER TO AUTHORIZE IT
+#
+# The authorizing primary user must:
+#   - have Secure Token ENABLED
+#   - temporarily/currently be an Administrator
+#
+# If the primary user is Standard, root temporarily promotes them. The cleanup
+# trap restores Standard membership if the token workflow fails or is cancelled.
+# ==============================================================================
+
+if [[ &quot;$NEED_TOKEN_GRANT&quot; -eq 1 ]]; then
+
+    CONSOLE_TOKEN_STATE=&quot;$(get_token_state &quot;$CONSOLE_USER&quot;)&quot;
+
+    case &quot;$CONSOLE_TOKEN_STATE&quot; in
+        ENABLED)
+            log &quot;PASS: &#x27;$CONSOLE_USER&#x27; has Secure Token ENABLED.&quot;
+            ;;
+        *)
+            show_error &quot;Your account does not have a Secure Token, so it cannot authorize one for the local device administrator.&quot;
+            log &quot;BLOCKED: Authorizing account &#x27;$CONSOLE_USER&#x27; does not have a confirmed Secure Token.&quot;
+            exit 40
+            ;;
+    esac
+
+    CONSOLE_PERMISSION_STATE=&quot;$(get_admin_state &quot;$CONSOLE_USER&quot;)&quot;
+
+    case &quot;$CONSOLE_PERMISSION_STATE&quot; in
+        Administrator)
+            log &quot;PASS: &#x27;$CONSOLE_USER&#x27; is already an Administrator and can authorize the token.&quot;
+            ;;
+
+        Standard)
+            log &quot;CHANGE REQUIRED: &#x27;$CONSOLE_USER&#x27; is Standard while a token grant is required.&quot;
+            log &quot;Temporarily promoting &#x27;$CONSOLE_USER&#x27; to Administrator.&quot;
+
+            /usr/sbin/dseditgroup -o edit -a &quot;$CONSOLE_USER&quot; -t user admin
+            PROMOTE_RESULT=$?
+
+            if [[ &quot;$PROMOTE_RESULT&quot; -ne 0 ]]; then
+                log &quot;ERROR: Failed to temporarily promote &#x27;$CONSOLE_USER&#x27;.&quot;
+                exit 41
+            fi
+
+            CONSOLE_PERMISSION_STATE=&quot;$(get_admin_state &quot;$CONSOLE_USER&quot;)&quot;
+
+            case &quot;$CONSOLE_PERMISSION_STATE&quot; in
+                Administrator)
+                    TEMPORARILY_PROMOTED=1
+                    CHANGES_MADE=1
+                    log &quot;SUCCESS: &#x27;$CONSOLE_USER&#x27; is temporarily an Administrator.&quot;
+                    ;;
+                *)
+                    log &quot;ERROR: Temporary promotion verification failed for &#x27;$CONSOLE_USER&#x27;.&quot;
+                    exit 41
+                    ;;
+            esac
+            ;;
+    esac
+fi
+
+
+# ==============================================================================
+# SECTION 12 — PROMPT ONLY WHEN NEEDED AND GRANT THE SECURE TOKEN
+#
+# This entire section is skipped when &quot;admin&quot; already has Secure Token ENABLED.
+# ==============================================================================
+
+if [[ &quot;$NEED_TOKEN_GRANT&quot; -eq 1 ]]; then
+
+    attempt=1
+
+    while [[ &quot;$attempt&quot; -le &quot;$MAX_PASSWORD_ATTEMPTS&quot; ]]; do
+
+        PROMPT_RESULT=&quot;$(
+            prompt_for_password \
+                &quot;Enter the current password for your account ($CONSOLE_USER). This is required to authorize the local device administrator.&quot; \
+                2&gt;&amp;1
+        )&quot;
+
+        PROMPT_STATUS=$?
+
+        if [[ &quot;$PROMPT_STATUS&quot; -ne 0 ]]; then
+            show_error &quot;The password window could not be opened. Please sign in fully and try again, or contact IT.&quot;
+            log &quot;ERROR: Password dialog failed to launch (exit code $PROMPT_STATUS): $PROMPT_RESULT&quot;
+            exit 50
+        fi
+
+        case &quot;$PROMPT_RESULT&quot; in
+            &quot;__SECURE_TOKEN_GUI_CANCELLED__&quot;)
+                log &quot;CANCELLED: User cancelled the password prompt.&quot;
+                exit 50
+                ;;
+
+            &quot;__SECURE_TOKEN_GUI_ERROR__&quot;*)
+                show_error &quot;The password window could not be displayed. Please sign in fully and try again, or contact IT.&quot;
+                log &quot;ERROR: Password dialog failed: ${PROMPT_RESULT#__SECURE_TOKEN_GUI_ERROR__}&quot;
+                exit 50
+                ;;
+
+            &quot;__SECURE_TOKEN_GUI_PASSWORD__&quot;*)
+                USER_PASSWORD=&quot;${PROMPT_RESULT#__SECURE_TOKEN_GUI_PASSWORD__}&quot;
+                ;;
+
+            *)
+                show_error &quot;The password window returned an unexpected result. No changes were made. Contact IT.&quot;
+                log &quot;ERROR: Password dialog returned an unexpected result.&quot;
+                exit 50
+                ;;
+        esac
+
+        password_is_valid &quot;$CONSOLE_USER&quot; &quot;$USER_PASSWORD&quot;
+        USER_PASSWORD_VALID=$?
+
+        if [[ &quot;$USER_PASSWORD_VALID&quot; -eq 0 ]]; then
+            break
+        fi
+
+        USER_PASSWORD=&quot;&quot;
+
+        if [[ &quot;$attempt&quot; -lt &quot;$MAX_PASSWORD_ATTEMPTS&quot; ]]; then
+            show_error &quot;That password was not accepted. Please try again.&quot;
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    if [[ -z &quot;$USER_PASSWORD&quot; ]]; then
+        show_error &quot;Your password could not be verified. No changes were made.&quot;
+        log &quot;ERROR: Could not verify the authorizing account password.&quot;
+        exit 51
+    fi
+
+    password_is_valid &quot;$CONSOLE_USER&quot; &quot;$USER_PASSWORD&quot;
+    FINAL_USER_PASSWORD_VALID=$?
+
+    if [[ &quot;$FINAL_USER_PASSWORD_VALID&quot; -ne 0 ]]; then
+        show_error &quot;Your password could not be verified. No changes were made.&quot;
+        log &quot;ERROR: Could not verify the authorizing account password.&quot;
+        exit 51
+    fi
+
+    ADMIN_PASSWORD=&quot;$MANAGEMENT_ADMIN_PASSWORD&quot;
+
+    password_is_valid &quot;$MANAGEMENT_ADMIN&quot; &quot;$ADMIN_PASSWORD&quot;
+    ADMIN_PASSWORD_VALID=$?
+
+    if [[ &quot;$ADMIN_PASSWORD_VALID&quot; -ne 0 ]]; then
+        show_error &quot;The local device administrator password could not be verified. No changes were made.&quot;
+        log &quot;ERROR: Configured password for &#x27;$MANAGEMENT_ADMIN&#x27; is invalid.&quot;
+        exit 52
+    fi
+
+    log &quot;Attempting Secure Token grant from &#x27;$CONSOLE_USER&#x27; to &#x27;$MANAGEMENT_ADMIN&#x27;.&quot;
+
+    /usr/sbin/sysadminctl \
+        -adminUser &quot;$CONSOLE_USER&quot; \
+        -adminPassword &quot;$USER_PASSWORD&quot; \
+        -secureTokenOn &quot;$MANAGEMENT_ADMIN&quot; \
+        -password &quot;$ADMIN_PASSWORD&quot; &gt;/dev/null 2&gt;&amp;1
+
+    SYSADMINCTL_GRANT_RESULT=$?
+
+    cleanup_sensitive_values
+
+    MANAGEMENT_TOKEN_STATE=&quot;$(get_token_state &quot;$MANAGEMENT_ADMIN&quot;)&quot;
+
+    case &quot;$MANAGEMENT_TOKEN_STATE&quot; in
+        ENABLED)
+            CHANGES_MADE=1
+            TOKEN_WAS_GRANTED=1
+            log &quot;SUCCESS: &#x27;$MANAGEMENT_ADMIN&#x27; now has Secure Token ENABLED.&quot;
+            ;;
+        *)
+            show_error &quot;macOS did not grant a Secure Token to the local device administrator. Contact IT.&quot;
+            log &quot;ERROR: Secure Token verification failed after sysadminctl (exit code $SYSADMINCTL_GRANT_RESULT).&quot;
+            exit 53
+            ;;
+    esac
+
+    write_snapshot &quot;POST-TOKEN — TOKEN GRANT VERIFIED, BEFORE USER DEMOTION&quot;
+    log &quot;POST-TOKEN snapshot appended to &#x27;$STATUS_FILE&#x27;.&quot;
+fi
+
+
+# ==============================================================================
+# SECTION 13 — DETERMINE WHETHER THE PRIMARY USER STILL NEEDS DEMOTION
+#
+# At this point &quot;admin&quot; should have a Secure Token.
+#
+# If the primary user is already Standard:
+#   - no demotion is performed
+#
+# If the primary user is still Administrator:
+#   - the management account is independently revalidated AGAIN immediately
+#     before the demotion command is permitted to run
+# ==============================================================================
+
+CURRENT_CONSOLE_PERMISSION=&quot;$(get_admin_state &quot;$CONSOLE_USER&quot;)&quot;
+
+case &quot;$CURRENT_CONSOLE_PERMISSION&quot; in
+    Standard)
+        NEED_USER_DEMOTION=0
+        TEMPORARILY_PROMOTED=0
+        log &quot;NO CHANGE: &#x27;$CONSOLE_USER&#x27; is already Standard.&quot;
+        ;;
+
+    Administrator)
+        NEED_USER_DEMOTION=1
+        log &quot;CHANGE REQUIRED: &#x27;$CONSOLE_USER&#x27; is still an Administrator and must become Standard.&quot;
+        ;;
+esac
+
+
+# ==============================================================================
+# SECTION 14 — INDEPENDENT FINAL VALIDATION IMMEDIATELY BEFORE DEMOTION
+#
+# This section runs ONLY when a demotion is actually required.
+#
+# It does not trust the earlier token variable or earlier account checks.
+# It independently asks macOS for the state again immediately before changing
+# the primary user&#x27;s privileges.
+# ==============================================================================
+
+if [[ &quot;$NEED_USER_DEMOTION&quot; -eq 1 ]]; then
+
+    log &quot;Beginning independent pre-demotion validation.&quot;
+
+    account_exists &quot;$MANAGEMENT_ADMIN&quot;
+    FINAL_ADMIN_EXISTS_RESULT=$?
+
+    if [[ &quot;$FINAL_ADMIN_EXISTS_RESULT&quot; -ne 0 ]]; then
+        log &quot;BLOCKED: &#x27;$MANAGEMENT_ADMIN&#x27; no longer exists.&quot;
+        exit 60
+    fi
+
+    log &quot;PRE-DEMOTION PASS 1: &#x27;$MANAGEMENT_ADMIN&#x27; exists.&quot;
+
+    management_admin_is_enabled
+    FINAL_ADMIN_ENABLED_RESULT=$?
+
+    if [[ &quot;$FINAL_ADMIN_ENABLED_RESULT&quot; -ne 0 ]]; then
+        log &quot;BLOCKED: &#x27;$MANAGEMENT_ADMIN&#x27; is disabled or could not be read.&quot;
+        exit 61
+    fi
+
+    log &quot;PRE-DEMOTION PASS 2: &#x27;$MANAGEMENT_ADMIN&#x27; is enabled.&quot;
+
+    FINAL_ADMIN_PERMISSION=&quot;$(get_admin_state &quot;$MANAGEMENT_ADMIN&quot;)&quot;
+
+    case &quot;$FINAL_ADMIN_PERMISSION&quot; in
+        Administrator)
+            log &quot;PRE-DEMOTION PASS 3: &#x27;$MANAGEMENT_ADMIN&#x27; is an Administrator.&quot;
+            ;;
+        *)
+            log &quot;BLOCKED: &#x27;$MANAGEMENT_ADMIN&#x27; is not an Administrator.&quot;
+            exit 62
+            ;;
+    esac
+
+    # IMPORTANT:
+    # This is a fresh, independent Secure Token query made immediately before
+    # the demotion. The raw macOS response is logged so the exact result can be
+    # reviewed later.
+    FINAL_ADMIN_TOKEN_RAW=$(
+        /usr/sbin/sysadminctl -secureTokenStatus &quot;$MANAGEMENT_ADMIN&quot; 2&gt;&amp;1
+    )
+
+    log &quot;Independent Secure Token recheck returned:&quot;
+    log &quot;$FINAL_ADMIN_TOKEN_RAW&quot;
+
+    case &quot;$FINAL_ADMIN_TOKEN_RAW&quot; in
+        *&quot;Secure token is ENABLED&quot;*)
+            log &quot;PRE-DEMOTION PASS 4: &#x27;$MANAGEMENT_ADMIN&#x27; has Secure Token ENABLED.&quot;
+            ;;
+        *)
+            log &quot;BLOCKED: Independent Secure Token recheck did NOT report ENABLED.&quot;
+            log &quot;The primary user will NOT be demoted.&quot;
+            exit 63
+            ;;
+    esac
+
+    log &quot;ALL INDEPENDENT PRE-DEMOTION CHECKS PASSED.&quot;
+
+
+# ==============================================================================
+# SECTION 15 — DEMOTE THE PRIMARY USER
+# ==============================================================================
+
+    case &quot;$CONSOLE_USER&quot; in
+        &quot;$MANAGEMENT_ADMIN&quot;)
+            log &quot;BLOCKED: The protected management account &#x27;$MANAGEMENT_ADMIN&#x27; will never be demoted.&quot;
+            exit 64
+            ;;
+    esac
+
+    log &quot;Demoting &#x27;$CONSOLE_USER&#x27; from Administrator to Standard.&quot;
+
+    /usr/sbin/dseditgroup -o edit -d &quot;$CONSOLE_USER&quot; -t user admin
+    DEMOTION_RESULT=$?
+
+    if [[ &quot;$DEMOTION_RESULT&quot; -ne 0 ]]; then
+        log &quot;ERROR: dseditgroup failed while demoting &#x27;$CONSOLE_USER&#x27;.&quot;
+        exit 65
+    fi
+
+    FINAL_CONSOLE_PERMISSION=&quot;$(get_admin_state &quot;$CONSOLE_USER&quot;)&quot;
+
+    case &quot;$FINAL_CONSOLE_PERMISSION&quot; in
+        Standard)
+            CHANGES_MADE=1
+            TEMPORARILY_PROMOTED=0
+            log &quot;SUCCESS: &#x27;$CONSOLE_USER&#x27; is now Standard.&quot;
+            ;;
+        *)
+            log &quot;ERROR: Verification failed. &#x27;$CONSOLE_USER&#x27; still appears to be an Administrator.&quot;
+            exit 66
+            ;;
+    esac
+fi
+
+
+# ==============================================================================
+# SECTION 16 — FINAL ACCOUNT-STATE REPORT
+#
+# Any successful remediation results in a second complete snapshot so the file
+# shows both the original state and the resolved state with independent times.
+#
+# A perfectly healthy no-change run already exited silently in Section 7 after
+# writing its START snapshot.
+# ==============================================================================
+
+if [[ &quot;$CHANGES_MADE&quot; -eq 1 ]]; then
+    write_snapshot &quot;FINAL — AFTER ALL REQUIRED REMEDIATION&quot;
+
+    {
+        printf &#x27;%s\n&#x27; &quot;RESULT: REMEDIATION COMPLETE&quot;
+        printf &#x27;%s\n&#x27; &quot;Completed: $(/bin/date &#x27;+%Y-%m-%d %H:%M:%S %Z&#x27;)&quot;
+        printf &#x27;\n&#x27;
+    } &gt;&gt; &quot;$STATUS_FILE&quot;
+
+    log &quot;FINAL snapshot appended to &#x27;$STATUS_FILE&#x27;.&quot;
+    log &quot;----- BEGIN COMPLETE STATUS FILE -----&quot;
+    /bin/cat &quot;$STATUS_FILE&quot;
+    log &quot;----- END COMPLETE STATUS FILE -----&quot;
+else
+    log &quot;No account changes were required after evaluation.&quot;
+fi
+
+WORKFLOW_COMPLETE=1
+
+# Deliberately no success dialog here.
+# Repeated healthy runs and silent remediations should not interrupt the user.
+log &quot;WORKFLOW COMPLETE.&quot;
+exit 0</code></pre></div></section><footer class="footer">Configuration Ownership: This documentation describes the current implementation and does not constitute authorization to modify it. Configuration changes should be coordinated with the endpoint-management owner and reflected in the corresponding source configuration.<br><br>Source hierarchy: raw NinjaOne configuration / raw script or mobileconfig → component explanation documentation → architecture and policy documentation.</footer></main><script src="../assets/site.js"></script></body></html>
