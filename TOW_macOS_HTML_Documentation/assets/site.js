@@ -50,19 +50,46 @@
     });
   });
 
-  /* Ambient cursor light. Cosmetic only; disabled for reduced-motion users. */
+  /* Ambient cursor light. Smoothly follows pointer position on desktop. */
   const reduced=window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if(!reduced && window.matchMedia('(pointer:fine)').matches){
-    let raf=0;
+  const finePointer=window.matchMedia && window.matchMedia('(pointer:fine)').matches;
+
+  if(!reduced && finePointer){
+    let targetX=50, targetY=24;
+    let currentX=50, currentY=24;
+    let running=false;
+
+    const renderGlow=()=>{
+      currentX += (targetX-currentX)*0.16;
+      currentY += (targetY-currentY)*0.16;
+
+      document.documentElement.style.setProperty('--mx',currentX.toFixed(2)+'%');
+      document.documentElement.style.setProperty('--my',currentY.toFixed(2)+'%');
+
+      const stillMoving=Math.abs(targetX-currentX)>.02 || Math.abs(targetY-currentY)>.02;
+      if(stillMoving){
+        requestAnimationFrame(renderGlow);
+      } else {
+        running=false;
+      }
+    };
+
     window.addEventListener('pointermove',e=>{
-      if(raf) return;
-      raf=requestAnimationFrame(()=>{
-        const x=(e.clientX/window.innerWidth)*100;
-        const y=(e.clientY/window.innerHeight)*100;
-        document.documentElement.style.setProperty('--mx',x.toFixed(2)+'%');
-        document.documentElement.style.setProperty('--my',y.toFixed(2)+'%');
-        raf=0;
-      });
+      targetX=(e.clientX/window.innerWidth)*100;
+      targetY=(e.clientY/window.innerHeight)*100;
+      document.documentElement.style.setProperty('--cursor-opacity','1');
+      if(!running){
+        running=true;
+        requestAnimationFrame(renderGlow);
+      }
     },{passive:true});
+
+    window.addEventListener('pointerleave',()=>{
+      document.documentElement.style.setProperty('--cursor-opacity','.45');
+    });
+
+    window.addEventListener('pointerenter',()=>{
+      document.documentElement.style.setProperty('--cursor-opacity','1');
+    });
   }
 })();
