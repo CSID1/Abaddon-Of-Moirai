@@ -70,17 +70,23 @@ body::before {
   mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,.74) 62%, transparent 100%);
 }
 
-/* Cursor-following ambient light + lower violet haze */
+/* Cursor-following ambient light + lower violet haze.
+   This layer sits behind the glass surfaces (not behind the body background),
+   so the light remains visible through translucent panels. */
 body::after {
   content: "";
   position: fixed;
-  inset: -20%;
-  z-index: -2;
+  inset: 0;
+  z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at var(--mx, 50%) var(--my, 24%), rgba(56, 221, 255, .105), transparent 17rem),
+    radial-gradient(circle at var(--mx, 50%) var(--my, 24%),
+      rgba(72, 228, 255, calc(.22 * var(--cursor-opacity, 1))) 0%,
+      rgba(61, 139, 255, calc(.11 * var(--cursor-opacity, 1))) 9rem,
+      transparent 21rem),
     radial-gradient(ellipse at 50% 100%, rgba(110, 61, 255, .15), transparent 42%);
-  filter: blur(28px);
+  filter: blur(18px);
+  transition: opacity .2s ease;
 }
 
 a {
@@ -95,6 +101,8 @@ a:hover {
 
 /* The existing file structure and page markup are intentionally preserved. */
 .shell {
+  position: relative;
+  z-index: 1;
   width: min(1680px, calc(100% - 48px));
   max-width: none;
   margin: 0 auto;
@@ -162,8 +170,8 @@ details,
   background:
     radial-gradient(
       circle,
-      color-mix(in srgb, var(--accent) 36%, #45eaff) 0%,
-      rgba(90,80,255,.14) 36%,
+      color-mix(in srgb, var(--accent) 32%, #45eaff) 0%,
+      rgba(90,80,255,.12) 36%,
       transparent 68%
     );
   filter: blur(12px);
